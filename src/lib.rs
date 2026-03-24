@@ -16,7 +16,7 @@ use chk::{
 };
 
 use chk::items::{Action, ListItem, TableItem};
-use ramp::prism::canvas::Text;
+use ramp::prism::canvas::{Span, Text};
 use ramp::prism::drawable::Component;
 use ramp::prism::layout::{Column, Padding};
 
@@ -44,11 +44,8 @@ impl chk::App for Calendar {
 }
 
 // Define the first screen of the app
-#[derive(Debug, Component, Clone)]
-//FIX: not sure which Page to use. 
-pub struct MonthScreen(Column, Page);
-
-impl OnEvent for MonthScreen {}
+#[derive(Debug, Clone)]
+pub struct MonthScreen;
 
 impl MonthScreen {
     pub fn new(
@@ -71,14 +68,15 @@ impl MonthScreen {
         let current_year = now.format("%Y").to_string();
         let current_month_and_year = format!("{} {}", current_month, current_year);
 
-        let current_month_and_year_for_text = Text::new(
-            theme,
-            &current_month_and_year,
-            TextSize::Md,
-            TextStyle::Primary,
-            Align::Left,
-            None,
-        );
+        // let current_month_and_year_for_text = Text::new(
+        //     theme,
+        //     &current_month_and_year,
+        //     TextSize::Md,
+        //     TextStyle::Primary,
+        //     Align::Left,
+        //     None,
+        // );
+        let current_month_and_year_for_text = Text::new(Span::new(current_month_and_year, 0.5, None, , color, kerning), width, align, max_lines)
 
         let next_11_months = Self::next_11_months_determiner(&now);
 
