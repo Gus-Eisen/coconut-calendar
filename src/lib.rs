@@ -66,7 +66,6 @@ impl MonthScreen {
         let current_month = now.format("%B").to_string();
         let current_year = now.format("%Y").to_string();
         let current_month_and_year = format!("{} {}", current_month, current_year);
-        //FIX: Use Display::Label for Text creation.
         // let current_month_and_year_for_text = Text::new(
         //     theme,
         //     &current_month_and_year,
@@ -177,7 +176,9 @@ impl MonthScreen {
         //     Align::Left,
         //     None,
         // );
-        // //FIX: Use Diplay::List for LIG.
+        //FIX: Use Diplay::List for LIG.
+
+        let test_listitem = ListItem::plain("test", "subtitle", None, None);
         // let lig_for_1 = ListItemGroup::new(Self::listitem_builder_plus_n(
         //     theme,
         //     next_11_months.first().unwrap(),
@@ -185,7 +186,7 @@ impl MonthScreen {
         //     event_registry.clone(),
         //     event_for_ees.clone(),
         // ));
-        //
+
         // let lig_for_2 = ListItemGroup::new(Self::listitem_builder_plus_n(
         //     theme,
         //     next_11_months.get(1).unwrap(),
@@ -306,7 +307,12 @@ impl MonthScreen {
 
         Root::new(
             "Calendar",
-            vec![Display::text("Hello world")],
+            //TODO: put LIG in vec here.
+            vec![Display::list(
+                Some("Put month name here."),
+                Self::listitem_builder(theme, now),
+                None,
+            )],
             None,
             ("Test".into(), Flow::default()),
             None,
@@ -314,74 +320,43 @@ impl MonthScreen {
     }
 
     // Creates User's current month.
-    // fn listitem_builder(
-    //     theme: &Theme,
-    //     now: DateTime<chrono::Local>,
-    //     registry_snapshot: EventRegistry,
-    //     event_registry: Arc<Mutex<EventRegistry>>,
-    //     event_for_ees: Arc<Mutex<EventForEES>>,
-    // ) -> Vec<ListItem> {
-    //     let range = Self::num_of_days_in_month(now);
-    //     eprintln!("{:?}", now);
-    //
-    //     (1..=range)
-    //         .map(|d| {
-    //             let day_of_week = now.with_day(d as u32).unwrap().weekday();
-    //             let day_of_month = d as u32;
-    //             let month = now.month();
-    //             let year = now.year();
-    //             let events_with_days = registry_snapshot.days_with_events(year, month);
-    //             let has_event = events_with_days.contains(&(d as u32));
-    //             let first_event_title = has_event
-    //                 .then(|| {
-    //                     registry_snapshot
-    //                         .events_for_day(year, month, d as u32)
-    //                         .into_iter()
-    //                         .next()
-    //                         //FIX: TitleSubtitle is now passed in as two strings. Not its own object.
-    //                         .map(|e| TitleSubtitle::new(e.title(), None))
-    //                 })
-    //                 .flatten();
-    //
-    //             let reg_clone = event_registry.clone();
-    //             let ees_clone = event_for_ees.clone();
-    //             let flair = if d == now.day() as i32 {
-    //                 Some(("notification", Color::from_hex("#FF0000", 255)))
-    //             } else {
-    //                 None
-    //             };
-    //
-    //             ListItem::new(
-    //                 theme,
-    //                 None,
-    //                 ListItemInfoLeft::new(
-    //                     //TODO: create colored current day here.
-    //                     &d.to_string(),
-    //                     Some(&day_of_week.to_string()),
-    //                     None,
-    //                     flair,
-    //                 ),
-    //                 first_event_title,
-    //                 None,
-    //                 None,
-    //                 move |ctx: &mut Context, theme: &Theme| {
-    //                     let page = Box::new(
-    //                         DayViewScreen::new(
-    //                             theme,
-    //                             year,
-    //                             month,
-    //                             day_of_month,
-    //                             reg_clone.clone(),
-    //                             ees_clone.clone(),
-    //                         )
-    //                         .unwrap(),
-    //                     );
-    //                     ctx.send(Request::event(NavigationEvent::push(PageFlow::new(page))));
-    //                 },
-    //             )
-    //         })
-    //         .collect()
-    // }
+    fn listitem_builder(
+        theme: &Theme,
+        now: DateTime<chrono::Local>,
+        // registry_snapshot: EventRegistry,
+        // event_registry: Arc<Mutex<EventRegistry>>,
+        // event_for_ees: Arc<Mutex<EventForEES>>,
+    ) -> Vec<ListItem> {
+        let range = Self::num_of_days_in_month(now);
+        eprintln!("{:?}", now);
+
+        (1..=range)
+            .map(|d| {
+                let day_of_week = now.with_day(d as u32).unwrap().weekday().to_string();
+                let day_of_month = d as u32;
+                let month = now.month();
+                let year = now.year();
+                // let events_with_days = registry_snapshot.days_with_events(year, month);
+                // let has_event = events_with_days.contains(&(d as u32));
+                // let first_event_title = has_event
+                //     .then(|| {
+                //         registry_snapshot
+                //             .events_for_day(year, month, d as u32)
+                //             .into_iter()
+                //             .next()
+                //             //FIX: TitleSubtitle is now passed in as two strings. Not its own object.
+                //             .map(|e| TitleSubtitle::new(e.title(), None))
+                //     })
+                //     .flatten();
+                //
+                // let reg_clone = event_registry.clone();
+                // let ees_clone = event_for_ees.clone();
+                let day = d.to_string();
+
+                ListItem::plain(&day, &day_of_week, None, None)
+            })
+            .collect()
+    }
 
     fn next_11_months_determiner(now: &DateTime<Local>) -> Vec<String> {
         (1..=11)
@@ -392,7 +367,7 @@ impl MonthScreen {
             .collect()
     }
 
-    // Creates next 11 months after current month.
+    //Creates next 11 months after current month.
     // pub fn listitem_builder_plus_n(
     //     theme: &Theme,
     //     chosen_month_and_year: &str,
