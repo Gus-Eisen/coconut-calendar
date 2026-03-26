@@ -66,17 +66,7 @@ impl MonthScreen {
         let current_month = now.format("%B").to_string();
         let current_year = now.format("%Y").to_string();
         let current_month_and_year = format!("{} {}", current_month, current_year);
-        // let current_month_and_year_for_text = Text::new(
-        //     theme,
-        //     &current_month_and_year,
-        //     TextSize::Md,
-        //     TextStyle::Primary,
-        //     Align::Left,
-        //     None,
-        // );
-        // let current_month_and_year_for_text = Text::new(Span::new(current_month_and_year, 0.5, None, , color, kerning), width, align, max_lines)
-        //
-        // let next_11_months = Self::next_11_months_determiner(&now);
+        let next_11_months = Self::next_11_months_determiner(&now);
 
         // let next_11_months_1 = Text::new(
         //     theme,
@@ -280,7 +270,6 @@ impl MonthScreen {
         // let content = Content::new(
         //     Offset::Start,
         //     vec![
-        //         Box::new(current_month_and_year_for_text),
         //         Box::new(listitemgroup_for_cmayft),
         //         Box::new(next_11_months_1),
         //         Box::new(lig_for_1),
@@ -309,7 +298,7 @@ impl MonthScreen {
             "Calendar",
             //TODO: put LIG in vec here.
             vec![Display::list(
-                Some("Put month name here."),
+                Some(&current_month_and_year),
                 Self::listitem_builder(theme, now),
                 None,
             )],
