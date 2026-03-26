@@ -8,7 +8,6 @@ use std::sync::{Arc, Mutex};
 use chrono::{DateTime, Months, NaiveDate};
 use chrono::{Datelike, Local};
 
-// #![allow(clippy::new_ret_no_self)]
 use ramp::prism;
 
 use chk::{
@@ -50,6 +49,7 @@ impl chk::App for Calendar {
 pub struct MonthScreen;
 
 impl MonthScreen {
+    #![allow(clippy::new_ret_no_self)]
     pub fn new(theme: &Theme) -> PageType {
         // if ctx.state().get::<EventForEES>().is_none() {
         //     let event_for_ees = EventForEES::new(None, None, None, None, None);
@@ -306,7 +306,7 @@ impl MonthScreen {
 
         Root::new(
             "Calendar",
-            vec![Display::currency(1.0, "this is a test.")],
+            vec![Display::text("Hello world")],
             None,
             ("Test".into(), Flow::default()),
             None,
