@@ -297,11 +297,68 @@ impl MonthScreen {
         Root::new(
             "Calendar",
             //TODO: put LIG in vec here.
-            vec![Display::list(
-                Some(&current_month_and_year),
-                Self::listitem_builder(theme, now),
-                None,
-            )],
+            vec![
+                Display::list(
+                    Some(&current_month_and_year),
+                    Self::listitem_builder(theme, now),
+                    None,
+                ),
+                Display::list(
+                    Some(next_11_months.first().unwrap()),
+                    Self::listitem_builder_plus_n(theme, next_11_months.first().unwrap()),
+                    None,
+                ),
+                Display::list(
+                    Some(next_11_months.get(1).unwrap()),
+                    Self::listitem_builder_plus_n(theme, next_11_months.get(1).unwrap()),
+                    None,
+                ),
+                Display::list(
+                    Some(next_11_months.get(2).unwrap()),
+                    Self::listitem_builder_plus_n(theme, next_11_months.get(2).unwrap()),
+                    None,
+                ),
+                Display::list(
+                    Some(next_11_months.get(3).unwrap()),
+                    Self::listitem_builder_plus_n(theme, next_11_months.get(3).unwrap()),
+                    None,
+                ),
+                Display::list(
+                    Some(next_11_months.get(4).unwrap()),
+                    Self::listitem_builder_plus_n(theme, next_11_months.get(4).unwrap()),
+                    None,
+                ),
+                Display::list(
+                    Some(next_11_months.get(5).unwrap()),
+                    Self::listitem_builder_plus_n(theme, next_11_months.get(5).unwrap()),
+                    None,
+                ),
+                Display::list(
+                    Some(next_11_months.get(6).unwrap()),
+                    Self::listitem_builder_plus_n(theme, next_11_months.get(6).unwrap()),
+                    None,
+                ),
+                Display::list(
+                    Some(next_11_months.get(7).unwrap()),
+                    Self::listitem_builder_plus_n(theme, next_11_months.get(7).unwrap()),
+                    None,
+                ),
+                Display::list(
+                    Some(next_11_months.get(8).unwrap()),
+                    Self::listitem_builder_plus_n(theme, next_11_months.get(8).unwrap()),
+                    None,
+                ),
+                Display::list(
+                    Some(next_11_months.get(9).unwrap()),
+                    Self::listitem_builder_plus_n(theme, next_11_months.get(9).unwrap()),
+                    None,
+                ),
+                Display::list(
+                    Some(next_11_months.get(10).unwrap()),
+                    Self::listitem_builder_plus_n(theme, next_11_months.get(10).unwrap()),
+                    None,
+                ),
+            ],
             None,
             ("Test".into(), Flow::default()),
             None,
@@ -347,6 +404,7 @@ impl MonthScreen {
             .collect()
     }
 
+    //Creates a vec of strings like "April 2026, May 2026", etc.
     fn next_11_months_determiner(now: &DateTime<Local>) -> Vec<String> {
         (1..=11)
             .map(|i| {
@@ -356,83 +414,57 @@ impl MonthScreen {
             .collect()
     }
 
-    //Creates next 11 months after current month.
-    // pub fn listitem_builder_plus_n(
-    //     theme: &Theme,
-    //     chosen_month_and_year: &str,
-    //     registry_snapshot: EventRegistry,
-    //     event_registry: Arc<Mutex<EventRegistry>>,
-    //     event_for_ees: Arc<Mutex<EventForEES>>,
-    // ) -> Vec<ListItem> {
-    //     let month_and_year: Vec<&str> = chosen_month_and_year.split_whitespace().collect();
-    //     let range = Self::num_of_days_in_month_for_vec_str(&month_and_year);
-    //
-    //     (1..=range)
-    //         .map(|d| {
-    //             let day_of_month = d as u32;
-    //             let year = month_and_year.get(1).unwrap().parse::<i32>().unwrap();
-    //             let month = match *month_and_year.first().unwrap() {
-    //                 "January" => 1,
-    //                 "February" => 2,
-    //                 "March" => 3,
-    //                 "April" => 4,
-    //                 "May" => 5,
-    //                 "June" => 6,
-    //                 "July" => 7,
-    //                 "August" => 8,
-    //                 "September" => 9,
-    //                 "October" => 10,
-    //                 "November" => 11,
-    //                 "December" => 12,
-    //                 _ => panic!("month in listitem_builder_plus_n is borked."),
-    //             };
-    //             let events_with_days = registry_snapshot.days_with_events(year, month);
-    //             let has_event = events_with_days.contains(&(d as u32));
-    //             let first_event_title = has_event
-    //                 .then(|| {
-    //                     registry_snapshot
-    //                         .events_for_day(year, month, d as u32)
-    //                         .into_iter()
-    //                         .next()
-    //                         .map(|e| TitleSubtitle::new(e.title(), None))
-    //                 })
-    //                 .flatten();
-    //
-    //             let reg_clone = event_registry.clone();
-    //             let ees_clone = event_for_ees.clone();
-    //             let day_of_week = NaiveDate::from_ymd_opt(year, month, d as u32)
-    //                 .unwrap()
-    //                 .weekday();
-    //             ListItem::new(
-    //                 theme,
-    //                 None,
-    //                 ListItemInfoLeft::new(
-    //                     &d.to_string(),
-    //                     Some(&day_of_week.to_string()),
-    //                     None,
-    //                     None,
-    //                 ),
-    //                 first_event_title,
-    //                 None,
-    //                 None,
-    //                 move |ctx: &mut Context, theme: &Theme| {
-    //                     let page = Box::new(
-    //                         DayViewScreen::new(
-    //                             theme,
-    //                             year,
-    //                             month,
-    //                             day_of_month,
-    //                             reg_clone.clone(),
-    //                             ees_clone.clone(),
-    //                         )
-    //                         .unwrap(),
-    //                     );
-    //                     ctx.send(Request::event(NavigationEvent::push(PageFlow::new(page))));
-    //                 },
-    //             )
-    //         })
-    //         .collect()
-    // }
+    // Creates next 11 months after current month.
+    pub fn listitem_builder_plus_n(
+        theme: &Theme,
+        chosen_month_and_year: &str,
+        // registry_snapshot: EventRegistry,
+        // event_registry: Arc<Mutex<EventRegistry>>,
+        // event_for_ees: Arc<Mutex<EventForEES>>,
+    ) -> Vec<ListItem> {
+        let month_and_year: Vec<&str> = chosen_month_and_year.split_whitespace().collect();
+        let range = Self::num_of_days_in_month_for_vec_str(&month_and_year);
+
+        (1..=range)
+            .map(|d| {
+                let day_of_month = d as u32;
+                let year = month_and_year.get(1).unwrap().parse::<i32>().unwrap();
+                let month = match *month_and_year.first().unwrap() {
+                    "January" => 1,
+                    "February" => 2,
+                    "March" => 3,
+                    "April" => 4,
+                    "May" => 5,
+                    "June" => 6,
+                    "July" => 7,
+                    "August" => 8,
+                    "September" => 9,
+                    "October" => 10,
+                    "November" => 11,
+                    "December" => 12,
+                    _ => panic!("month in listitem_builder_plus_n is borked."),
+                };
+                // let events_with_days = registry_snapshot.days_with_events(year, month);
+                // let has_event = events_with_days.contains(&(d as u32));
+                // let first_event_title = has_event
+                //     .then(|| {
+                //         registry_snapshot
+                //             .events_for_day(year, month, d as u32)
+                //             .into_iter()
+                //             .next()
+                //             .map(|e| TitleSubtitle::new(e.title(), None))
+                //     })
+                //     .flatten();
+                //
+                // let reg_clone = event_registry.clone();
+                // let ees_clone = event_for_ees.clone();
+                let day_of_week = NaiveDate::from_ymd_opt(year, month, d as u32)
+                    .unwrap()
+                    .weekday();
+                ListItem::plain(&d.to_string(), &day_of_week.to_string(), None, None)
+            })
+            .collect()
+    }
 
     fn is_leap_year(year: i32) -> bool {
         (year % 4 == 0) && (year % 100 != 0 || year % 400 == 0)
