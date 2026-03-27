@@ -68,9 +68,10 @@ impl MonthScreen {
         let current_month_and_year = format!("{} {}", current_month, current_year);
         let next_11_months = Self::next_11_months_determiner(&now);
 
+        let send = SendFlow::new(theme);
+
         Root::new(
             "Calendar",
-            //TODO: put LIG in vec here.
             vec![
                 Display::list(
                     Some(&current_month_and_year),
@@ -134,8 +135,8 @@ impl MonthScreen {
                 ),
             ],
             None,
-            ("Test".into(), Flow::default()),
-            None,
+            ("Test".into(), Flow::from_form(send.clone())),
+            Some(("Test".into(), Flow::from_form(send))),
         )
     }
 
@@ -178,7 +179,7 @@ impl MonthScreen {
             .collect()
     }
 
-    //Creates a vec of strings like "April 2026, May 2026", etc.
+    //Creates a vec of strings like "April 2026", "May 2026", etc.
     fn next_11_months_determiner(now: &DateTime<Local>) -> Vec<String> {
         (1..=11)
             .map(|i| {
@@ -292,6 +293,86 @@ impl MonthScreen {
             "December" => 31,
             _ => panic!("Something went wrong with month_and_year."),
         }
+    }
+}
+
+pub struct SendFlow;
+impl SendFlow {
+    #![allow(clippy::new_ret_no_self)]
+    pub fn new(theme: &Theme) -> Form {
+        let closure = Box::new(move |_ctx: &mut Context, objects: &Vec<State>| {
+            println!("Transaction {:?}", objects)
+        }) as Box<dyn FormSubmit>;
+
+        let review = |objects: &Vec<State>| {
+            let State::Text(address) = objects[0].clone() else {
+                todo!()
+            };
+            let btc = "0.00001234";
+            let State::Number(usd) = &objects[1] else {
+                todo!()
+            };
+            let State::Enumerator(priority) = &objects[2] else {
+                todo!()
+            };
+            let fee = "$0.38";
+            let total = "$12.30";
+
+            vec![
+                Display::review(
+                    "Confirm address",
+                    &address,
+                    "Bitcoin sent to the wrong address can never be recovered.",
+                ),
+                Display::table(
+                    "Confirm amount",
+                    vec![
+                        TableItem::new("Amount Sent (BTC)", btc),
+                        TableItem::new("Amount Sent", usd),
+                        TableItem::new(
+                            "Transaction Speed",
+                            match priority {
+                                // probably should use an enum here
+                                0 => "Standard (~2 hours)",
+                                _ => "Priority (~30 minutes)",
+                            },
+                        ),
+                        TableItem::new("Transaction Fee", fee),
+                        TableItem::new("Transaction Total", total),
+                    ],
+                ),
+            ]
+        };
+
+        let success = |objects: Vec<State>| {
+            let amount = if let State::Number(x) = &objects[1] {
+                x
+            } else {
+                "$0.00"
+            };
+            (Icons::Bitcoin, format!("You sent {}", amount))
+        };
+
+        Form::new(
+            theme,
+            vec![
+                FormItem::text("Bitcoin address"),
+                FormItem::number("Bitcoin amount", NumberVariant::Currency),
+                FormItem::enumerator(
+                    "Transaction speed",
+                    vec![
+                        ("Standard", "Arrives in ~2 hours\n$0.18 bitcoin network fee"),
+                        (
+                            "Priority",
+                            "Arrives in ~30 minutes\n$0.32 bitcoin network fee",
+                        ),
+                    ],
+                ),
+            ],
+            Some(Review::new("Confirm send", review)),
+            Some(Success::new("Bitcoin sent", success)),
+            closure,
+        )
     }
 }
 
