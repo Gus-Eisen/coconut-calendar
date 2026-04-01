@@ -135,8 +135,8 @@ impl MonthScreen {
                 ),
             ],
             None,
-            ("Test".into(), Flow::from_form(send.clone())),
-            Some(("Test".into(), Flow::from_form(send))),
+            ("Create Event".into(), Flow::from_form(send.clone())),
+            None,
         )
     }
 

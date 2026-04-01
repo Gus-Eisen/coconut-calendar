@@ -7,7 +7,7 @@ edition = "2024"
 include_dir = "0.7.4"
 serde = "1.0.228"
 chrono = "0.4.44"
-ramp = {package="ramp2", version="0.1.5"}
+ramp = {package="ramp2", version="0.1.4"}
 chk = {package="chk", version="1.0.0"}
 
 [lib]

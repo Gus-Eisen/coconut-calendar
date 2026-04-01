@@ -3006,9 +3006,9 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "ramp2"
-version = "0.1.5"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75dcdbbf565a3d63dc96b94ac27508633997aaa72577c445e0a957b781e49555"
+checksum = "7a33a1dbde3961275a87e0e4a5bae674ae29ec7df7415f42e9e6a3d3439d7dfa"
 dependencies = [
  "maverick_os",
  "prism2",
