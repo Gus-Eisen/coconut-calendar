@@ -17,7 +17,32 @@
 // use crate::various_date_selector_screens::month_selector_screen_block::MonthSelectorScreen;
 // use crate::various_date_selector_screens::time_selector_screen_block::TimeSelectorScreen;
 // use crate::various_date_selector_screens::year_selector_screen_block::YearSelectorScreen;
-//
+
+use chk::{Context, Flow, Form, FormItem, FormSubmit, State, Theme};
+
+pub struct EventEditorScreen;
+
+impl EventEditorScreen {
+    pub fn new(theme: &Theme) -> Flow {
+        let on_submit = Box::new(|_ctx: &mut Context, objects: &Vec<State>| {
+            println!("New event: {:?}", objects);
+        }) as Box<dyn FormSubmit>;
+
+        let form = Form::new(
+            theme,
+            vec![
+                FormItem::text("Event Title"),
+                FormItem::number("Date", chk::NumberVariant::Date),
+                FormItem::number("Time", chk::NumberVariant::Time),
+            ],
+            None,
+            None,
+            on_submit,
+        );
+
+        Flow::from_form(form)
+    }
+}
 // #[derive(Debug, Component, Clone)]
 // pub struct EventEditorScreen(
 //     Stack,
