@@ -17,16 +17,38 @@
 // use crate::various_date_selector_screens::month_selector_screen_block::MonthSelectorScreen;
 // use crate::various_date_selector_screens::time_selector_screen_block::TimeSelectorScreen;
 // use crate::various_date_selector_screens::year_selector_screen_block::YearSelectorScreen;
+use crate::Display;
 
-use chk::{Context, Flow, Form, FormItem, FormSubmit, State, Theme};
+use chk::{Context, Flow, Form, FormItem, FormSubmit, Review, State, Theme};
 
 pub struct EventEditorScreen;
 
 impl EventEditorScreen {
+    #![allow(clippy::new_ret_no_self)]
     pub fn new(theme: &Theme) -> Flow {
         let on_submit = Box::new(|_ctx: &mut Context, objects: &Vec<State>| {
             println!("New event: {:?}", objects);
         }) as Box<dyn FormSubmit>;
+
+        let getter = |states: &Vec<State>| {
+            let title = match states.get(0) {
+                Some(State::Text(t)) => t.clone(),
+                _ => String::from("(no title"),
+            };
+            let date = match states.get(1) {
+                Some(State::Number(d)) => d.clone(),
+                _ => String::from("(no date"),
+            };
+            let time = match states.get(2) {
+                Some(State::Number(t)) => t.clone(),
+                _ => String::from("(no time"),
+            };
+            vec![
+                Display::review("Event Title", &title, ""),
+                Display::review("Date", &date, ""),
+                Display::review("Time", &time, ""),
+            ]
+        };
 
         let form = Form::new(
             theme,
@@ -35,7 +57,7 @@ impl EventEditorScreen {
                 FormItem::number("Date", chk::NumberVariant::Date),
                 FormItem::number("Time", chk::NumberVariant::Time),
             ],
-            None,
+            Some(Review::new("New Event Review", getter)),
             None,
             on_submit,
         );

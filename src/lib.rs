@@ -21,6 +21,7 @@ use ramp::prism::canvas::{Span, Text};
 use ramp::prism::drawable::Component;
 use ramp::prism::layout::{Column, Padding};
 
+use crate::event_editor_screen::EventEditorScreen;
 // use crate::day_view_screen::DayViewScreen;
 use crate::objects::{EventForEES, EventRegistry};
 
@@ -135,7 +136,7 @@ impl MonthScreen {
                 ),
             ],
             None,
-            ("Create Event".into(), Flow::from_form(send)),
+            ("Create Event".into(), EventEditorScreen::new(theme)),
             None,
         )
     }
