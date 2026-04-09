@@ -31,22 +31,22 @@ impl EventEditorScreen {
         }) as Box<dyn FormSubmit>;
 
         let getter = |states: &Vec<State>| {
-            let title = match states.get(0) {
-                Some(State::Text(t)) => t.clone(),
-                _ => String::from("(no title"),
+            let title = match states.first() {
+                Some(State::Text(t)) => t,
+                _ => "(no title)",
             };
             let date = match states.get(1) {
-                Some(State::Number(d)) => d.clone(),
-                _ => String::from("(no date"),
+                Some(State::Number(d)) => d,
+                _ => "(no date)",
             };
             let time = match states.get(2) {
-                Some(State::Number(t)) => t.clone(),
-                _ => String::from("(no time"),
+                Some(State::Number(t)) => t,
+                _ => "(no time)",
             };
             vec![
-                Display::review("Event Title", &title, ""),
-                Display::review("Date", &date, ""),
-                Display::review("Time", &time, ""),
+                Display::review("Event Title", title, ""),
+                Display::review("Date", date, ""),
+                Display::review("Time", time, ""),
             ]
         };
 
