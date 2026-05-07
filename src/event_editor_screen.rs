@@ -28,6 +28,7 @@ impl EventEditorScreen {
     pub fn new(theme: &Theme) -> Flow {
         let on_submit = Box::new(|_ctx: &mut Context, objects: &Vec<State>| {
             println!("New event: {:?}", objects);
+            //TODO: put event-saving logic to event registry here.
         }) as Box<dyn FormSubmit>;
 
         let getter = |states: &Vec<State>| {
