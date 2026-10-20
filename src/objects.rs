@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use chrono::{DateTime, Datelike, Utc};
+use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime};
 
 #[derive(Debug, Clone)]
 pub enum Month {
@@ -75,55 +75,64 @@ impl Year {
     }
 }
 
-//Event(s) are stored in UTC, then converted to display appropriate TZ for User.
+//Event(s) are stored in local time (no timezone attached).
 #[derive(Debug, Clone)]
-pub struct EventForER {
+pub struct Event {
     title: String,
-    datetime: DateTime<Utc>,
+    datetime: NaiveDateTime,
 }
 
-impl EventForER {
-    pub fn new(title: String, datetime: DateTime<Utc>) -> Self {
+impl Event {
+    pub fn new(title: String, datetime: NaiveDateTime) -> Self {
         Self { title, datetime }
+    }
+
+    /// Builds an Event from the Create Event form's strings.
+    /// `date` is "DD-MM" and `time` is "HH:MM", as produced by chk's date/time inputs.
+    pub fn from_form(title: &str, date: &str, time: &str, year: i32) -> Result<Event, String> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err("Title can't be empty".to_string());
+        }
+        let date = NaiveDate::parse_from_str(&format!("{date}-{year}"), "%d-%m-%Y")
+            .map_err(|e| format!("Invalid date \"{date}\": {e}"))?;
+        let time = NaiveTime::parse_from_str(time, "%H:%M")
+            .map_err(|e| format!("Invalid time \"{time}\": {e}"))?;
+
+        Ok(Event::new(title.to_string(), date.and_time(time)))
     }
 
     pub fn title(&self) -> &str {
         &self.title
     }
 
-    pub fn datetime(&self) -> DateTime<Utc> {
+    pub fn datetime(&self) -> NaiveDateTime {
         self.datetime
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default)]
 pub struct EventRegistry {
-    vec_of_events: Vec<Option<EventForER>>,
+    events: Vec<Event>,
 }
 
 impl EventRegistry {
-    pub fn new(vec_of_events: Vec<Option<EventForER>>) -> Self {
-        Self { vec_of_events }
-    }
-
-    pub fn push(&mut self, event: Option<EventForER>) {
-        self.vec_of_events.push(event)
+    pub fn push(&mut self, event: Event) {
+        self.events.push(event)
     }
 
     pub fn days_with_events(&self, year: i32, month: u32) -> HashSet<u32> {
-        self.vec_of_events
+        self.events
             .iter()
-            .filter_map(|opt| opt.as_ref())
             .filter(|event| event.datetime.year() == year && event.datetime.month() == month)
             .map(|event| event.datetime.day())
             .collect()
     }
 
-    pub fn events_for_day(&self, year: i32, month: u32, day: u32) -> Vec<&EventForER> {
-        let mut events: Vec<&EventForER> = self
-            .vec_of_events
+    pub fn events_for_day(&self, year: i32, month: u32, day: u32) -> Vec<&Event> {
+        let mut events: Vec<&Event> = self
+            .events
             .iter()
-            .filter_map(|opt| opt.as_ref())
             .filter(|event| {
                 event.datetime.year() == year
                     && event.datetime.month() == month
@@ -279,5 +288,52 @@ impl EventForEES {
         self.month = None;
         self.day = None;
         self.time = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_form_valid_input() {
+        let event = Event::from_form("Dentist", "14-11", "09:30", 2026).unwrap();
+        let expected = NaiveDate::from_ymd_opt(2026, 11, 14)
+            .unwrap()
+            .and_hms_opt(9, 30, 0)
+            .unwrap();
+
+        assert_eq!(event.title(), "Dentist");
+        assert_eq!(event.datetime(), expected);
+    }
+
+    #[test]
+    fn from_form_rejects_empty_title() {
+        let err = Event::from_form("", "14-11", "09:30", 2026).unwrap_err();
+        assert_eq!(err, "Title can't be empty");
+    }
+
+    #[test]
+    fn from_form_rejects_whitespace_title() {
+        let err = Event::from_form("   ", "14-11", "09:30", 2026).unwrap_err();
+        assert_eq!(err, "Title can't be empty");
+    }
+
+    #[test]
+    fn from_form_rejects_zero_date() {
+        let err = Event::from_form("Dentist", "00-00", "09:30", 2026).unwrap_err();
+        assert!(err.contains("Invalid date"), "{err}");
+    }
+
+    #[test]
+    fn from_form_rejects_february_31st() {
+        let err = Event::from_form("Dentist", "31-02", "09:30", 2026).unwrap_err();
+        assert!(err.contains("Invalid date"), "{err}");
+    }
+
+    #[test]
+    fn from_form_rejects_hour_25() {
+        let err = Event::from_form("Dentist", "14-11", "25:00", 2026).unwrap_err();
+        assert!(err.contains("Invalid time"), "{err}");
     }
 }

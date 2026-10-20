@@ -3,6 +3,8 @@ mod event_editor_screen;
 mod objects;
 mod various_date_selector_screens;
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Months, NaiveDate};
@@ -31,12 +33,15 @@ pub struct Calendar;
 
 impl chk::App for Calendar {
     fn roots(&self, ctx: &mut Context, theme: &Theme) -> Vec<RootInfo> {
+        // The one in-memory event store. Screens that need it get an Rc clone.
+        let events = Rc::new(RefCell::new(EventRegistry::default()));
+
         vec![RootInfo::icon(
             ctx,
             theme,
             Icons::Home,
             "Home",
-            MonthScreen::new(theme),
+            MonthScreen::new(theme, events),
         )]
     }
 
@@ -51,7 +56,7 @@ pub struct MonthScreen;
 
 impl MonthScreen {
     #![allow(clippy::new_ret_no_self)]
-    pub fn new(theme: &Theme) -> PageType {
+    pub fn new(theme: &Theme, events: Rc<RefCell<EventRegistry>>) -> PageType {
         // if ctx.state().get::<EventForEES>().is_none() {
         //     let event_for_ees = EventForEES::new(None, None, None, None, None);
         //     ctx.state().set(event_for_ees);
@@ -136,7 +141,7 @@ impl MonthScreen {
                 ),
             ],
             None,
-            ("Create Event".into(), EventEditorScreen::new(theme)),
+            ("Create Event".into(), EventEditorScreen::new(theme, events)),
             None,
         )
     }

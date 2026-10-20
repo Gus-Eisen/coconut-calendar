@@ -17,18 +17,31 @@
 // use crate::various_date_selector_screens::month_selector_screen_block::MonthSelectorScreen;
 // use crate::various_date_selector_screens::time_selector_screen_block::TimeSelectorScreen;
 // use crate::various_date_selector_screens::year_selector_screen_block::YearSelectorScreen;
-use crate::Display;
+use std::cell::RefCell;
+use std::rc::Rc;
 
-use chk::{Context, Flow, Form, FormItem, FormSubmit, Review, State, Theme};
+use chrono::{Datelike, Local};
+
+use crate::Display;
+use crate::objects::{Event, EventRegistry};
+
+use chk::{Context, Flow, Form, FormItem, FormSubmit, Icons, Review, State, Success, Theme};
 
 pub struct EventEditorScreen;
 
 impl EventEditorScreen {
     #![allow(clippy::new_ret_no_self)]
-    pub fn new(theme: &Theme) -> Flow {
-        let on_submit = Box::new(|_ctx: &mut Context, objects: &Vec<State>| {
-            println!("New event: {:?}", objects);
-            //TODO: put event-saving logic to event registry here.
+    pub fn new(theme: &Theme, events: Rc<RefCell<EventRegistry>>) -> Flow {
+        // `move` gives the closure its own Rc handle to the shared registry.
+        let on_submit = Box::new(move |_ctx: &mut Context, states: &Vec<State>| {
+            match Self::event_from_states(states) {
+                Ok(event) => {
+                    let mut registry = events.borrow_mut();
+                    registry.push(event);
+                    println!("Event saved: {:?}", registry);
+                }
+                Err(e) => eprintln!("Event not saved: {e}"),
+            }
         }) as Box<dyn FormSubmit>;
 
         let getter = |states: &Vec<State>| {
@@ -51,6 +64,19 @@ impl EventEditorScreen {
             ]
         };
 
+        // Success only sees the form states, not whether on_submit saved the event,
+        // so it parses them again to show the right message.
+        let success = |states: Vec<State>| match Self::event_from_states(&states) {
+            Ok(event) => (
+                Icons::Checkmark,
+                format!(
+                    "Event saved for {}",
+                    event.datetime().format("%-d %b %Y at %H:%M")
+                ),
+            ),
+            Err(e) => (Icons::Error, format!("Event not saved. {e}")),
+        };
+
         let form = Form::new(
             theme,
             vec![
@@ -59,11 +85,29 @@ impl EventEditorScreen {
                 FormItem::number("Time", chk::NumberVariant::Time),
             ],
             Some(Review::new("New Event Review", getter)),
-            None,
+            Some(Success::new("New Event", success)),
             on_submit,
         );
 
         Flow::from_form(form)
+    }
+
+    /// Reads the form's states (title, date, time) and parses them into an Event.
+    /// The form has no year input, so the current year is used.
+    fn event_from_states(states: &[State]) -> Result<Event, String> {
+        let title = match states.first() {
+            Some(State::Text(t)) => t.as_str(),
+            _ => "",
+        };
+        let date = match states.get(1) {
+            Some(State::Number(d)) => d.as_str(),
+            _ => "",
+        };
+        let time = match states.get(2) {
+            Some(State::Number(t)) => t.as_str(),
+            _ => "",
+        };
+        Event::from_form(title, date, time, Local::now().year())
     }
 }
 // #[derive(Debug, Component, Clone)]
