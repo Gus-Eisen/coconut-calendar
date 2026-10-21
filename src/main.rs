@@ -1,8 +1,8 @@
-/* This is a test to debug editor */
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+fn main() {main::main()}
 
-fn main() {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        main::maverick_main()
-    }
-}
+#[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+fn main() {main::maverick_main()}
+
+#[cfg(target_os = "android")]
+fn main() {}
