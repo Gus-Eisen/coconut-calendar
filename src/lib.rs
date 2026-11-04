@@ -1,6 +1,6 @@
-use ramp::prism;
-use prism::drawable::Drawable;
 use chk::{App, Assets, ChkTheme, Color, Context, Icons, RootInfo, Theme};
+use prism::drawable::Drawable;
+use ramp::prism;
 
 mod event;
 pub use event::*;
@@ -12,7 +12,9 @@ ramp::run!(CoconutCalendar);
 pub struct CoconutCalendar;
 
 impl prism::Application for CoconutCalendar {
-    fn name() -> String {"Coconut Calendar".into()}
+    fn name() -> String {
+        "Coconut Calendar".into()
+    }
 
     fn new(ctx: &mut Context) -> impl Drawable {
         EventRegistry::import(ctx);
@@ -22,8 +24,16 @@ impl prism::Application for CoconutCalendar {
 
 impl App for CoconutCalendar {
     fn roots(&self, ctx: &mut Context, theme: &Theme) -> Vec<RootInfo> {
-        vec![RootInfo::icon(ctx, theme, Icons::Home, "Home", MonthScreen::root())]
+        vec![RootInfo::icon(
+            ctx,
+            theme,
+            Icons::Home,
+            "Home",
+            MonthScreen::root(),
+        )]
     }
 
-    fn theme(&self) -> ChkTheme {ChkTheme::Dark(Color::from_hex("#eb343a", 255))}
+    fn theme(&self) -> ChkTheme {
+        ChkTheme::Dark(Color::from_hex("#eb343a", 255))
+    }
 }
