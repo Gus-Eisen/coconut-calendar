@@ -15,6 +15,7 @@ impl prism::Application for CoconutCalendar {
     fn name() -> String {"Coconut Calendar".into()}
 
     fn new(ctx: &mut Context) -> impl Drawable {
+        EventRegistry::import(ctx);
         CoconutCalendar.build(ctx, Assets::new(vec![]))
     }
 }

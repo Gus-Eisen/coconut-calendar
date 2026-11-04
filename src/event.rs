@@ -1,9 +1,10 @@
-use chk::{Context, State, Watcher};
+use chk::{Context, State};
 use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime};
+use ramp::prism::air::{Contract, Id, Instance, Metadata};
 use ramp::prism::hardware::Data;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Event {
     title: String,
     datetime: NaiveDateTime,
@@ -32,28 +33,32 @@ impl Event {
     pub fn title(&self) -> &str {&self.title}
 
     pub fn datetime(&self) -> NaiveDateTime {self.datetime}
+
+    pub fn create(ctx: &mut Context, event: Event) {ctx.air.instances::<Event>().create(event);}
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+/// Each event is its own AIR instance; it never changes after creation.
+impl Contract for Event {
+    type Init = Event;
+    type Message = ();
+    type Result = ();
+
+    fn id() -> Id {Id::hash("CoconutCalendarEvent")}
+
+    fn init(init: Event, _metadata: Metadata) -> Self {init}
+
+    fn apply(&mut self, _message: (), _metadata: Metadata) {}
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EventRegistry {
     events: Vec<Event>,
 }
 
 impl EventRegistry {
-    pub fn load(ctx: &Context) -> Self {
-        match ctx.hardware.get_cache("coconut_calendar.events") {
-            Some(Data::Text(saved)) => serde_json::from_str(&saved).expect("Invalid saved events"),
-            Some(_) => panic!("The saved events must be text"),
-            None => Self::default(),
-        }
+    pub fn new(instances: &[Instance<Event>]) -> Self {
+        Self {events: instances.iter().map(|instance| instance.pending().clone()).collect()}
     }
-
-    pub fn save(&self, ctx: &Context) {
-        let saved = serde_json::to_string(self).expect("Could not encode the events");
-        ctx.hardware.set_cache("coconut_calendar.events", &Data::Text(saved));
-    }
-
-    pub fn push(&mut self, event: Event) {self.events.push(event)}
 
     pub fn on(&self, date: NaiveDate) -> Vec<&Event> {
         let mut events = self.events.iter().filter(|event| event.datetime.date() == date)
@@ -62,20 +67,11 @@ impl EventRegistry {
         events
     }
 
-    pub fn add(ctx: &mut Context, event: Event) {
-        let mut registry = Self::load(ctx);
-        registry.push(event);
-        registry.save(ctx);
-    }
-}
-
-impl Watcher for EventRegistry {
-    type Output = EventRegistry;
-
-    fn poll(&mut self, ctx: &mut Context) -> bool {Self::load(ctx) != *self}
-
-    fn get(&mut self, ctx: &mut Context) -> EventRegistry {
-        *self = Self::load(ctx);
-        self.clone()
+    /// Copies events saved by earlier versions into AIR. Repeating it creates no duplicates.
+    pub fn import(ctx: &mut Context) {
+        let Some(saved) = ctx.hardware.get_cache("coconut_calendar.events") else {return};
+        let Data::Text(saved) = saved else {panic!("The saved events must be text")};
+        let registry = serde_json::from_str::<Self>(&saved).expect("Invalid saved events");
+        for event in registry.events {Event::create(ctx, event)}
     }
 }

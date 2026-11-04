@@ -5,11 +5,24 @@ edition = "2024"
 rust-version = "1.88"
 
 [dependencies]
-ramp = {package = "ramp2", version = "1.0.2"}
-chk = {version = "1.1.0", git = "https://github.com/ramp-stack/chk", rev = "e2a15c6"}
+ramp = {package = "ramp2", version = "3.0.4"}
+chk = {version = "2.0.0", git = "https://github.com/ramp-stack/chk", rev = "2da2ba12e6973c17ffa7d8e70dc218d342552fdf"}
 chrono = {version = "0.4.44", features = ["serde"]}
 serde = {version = "1", features = ["derive"]}
 serde_json = "1"
+
+[package.metadata.piston.ios]
+team = "6DW6N89944"
+bundle_id = "com.guseisen.coconut.dev"
+minimum_os = "17.0"
+info_plist = "ios/Info.plist"
+
+[package.metadata.piston.developer]
+team = "6DW6N89944"
+identity = "028c91abcaf5f189cade6c92e0a81baba29caa05c88ed7aa5ce85b0cf353ede056"
+
+[package.metadata.piston.notifications]
+enabled = false
 
 [lib]
 name="main"
@@ -39,10 +52,3 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.weezl]
 opt-level = 3
-
-# Workaround: maverick_os 3.0.2 iOS LibraryPickerDelegate trips objc2 debug-only
-# protocol check (picker:didFinishPicking: not in the protocol impl). Remove once fixed.
-[profile.dev.package.maverick_os]
-debug-assertions = false
-[profile.dev.package.objc2]
-debug-assertions = false
