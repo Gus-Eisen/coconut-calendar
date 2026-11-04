@@ -39,3 +39,10 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.weezl]
 opt-level = 3
+
+# Workaround: maverick_os 3.0.2 iOS LibraryPickerDelegate trips objc2 debug-only
+# protocol check (picker:didFinishPicking: not in the protocol impl). Remove once fixed.
+[profile.dev.package.maverick_os]
+debug-assertions = false
+[profile.dev.package.objc2]
+debug-assertions = false
