@@ -9,7 +9,6 @@ ramp = {package = "ramp2", version = "3.0.4"}
 chk = {version = "2.0.0", git = "https://github.com/ramp-stack/chk", rev = "2da2ba12e6973c17ffa7d8e70dc218d342552fdf"}
 chrono = {version = "0.4.44", features = ["serde"]}
 serde = {version = "1", features = ["derive"]}
-serde_json = "1"
 
 [package.metadata.piston.ios]
 team = "6DW6N89944"

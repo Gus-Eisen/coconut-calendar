@@ -1,13 +1,13 @@
 use chk::{Context, State};
 use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime};
 use ramp::prism::air::{Contract, Id, Instance, Metadata};
-use ramp::prism::hardware::Data;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Event {
     title: String,
     datetime: NaiveDateTime,
+    deleted: bool,
 }
 
 impl Event {
@@ -40,6 +40,7 @@ impl Event {
         Event {
             title: title.trim().to_string(),
             datetime,
+            deleted: false,
         }
     }
 
@@ -54,61 +55,61 @@ impl Event {
     pub fn create(ctx: &mut Context, event: Event) {
         ctx.air.instances::<Event>().create(event);
     }
+
+    pub fn delete(instance: &mut Instance<Event>) {
+        instance.send(EventMessage::Delete);
+    }
 }
 
-/// Each event is its own AIR instance; it never changes after creation.
+#[derive(Debug, Clone, Hash, Serialize, Deserialize)]
+pub enum EventMessage {
+    Delete,
+}
+
+/// Each event is its own AIR instance. Deleting only marks it; AIR never erases data.
 impl Contract for Event {
     type Init = Event;
-    type Message = ();
+    type Message = EventMessage;
     type Result = ();
 
     fn id() -> Id {
-        Id::hash("CoconutCalendarEvent")
+        Id::hash("CoconutCalendarEventV2")
     }
 
     fn init(init: Event, _metadata: Metadata) -> Self {
         init
     }
 
-    fn apply(&mut self, _message: (), _metadata: Metadata) {}
+    fn apply(&mut self, message: EventMessage, _metadata: Metadata) {
+        match message {
+            EventMessage::Delete => self.deleted = true,
+        }
+    }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EventRegistry {
-    events: Vec<Event>,
+    events: Vec<(Instance<Event>, Event)>,
 }
 
 impl EventRegistry {
     pub fn new(instances: &[Instance<Event>]) -> Self {
-        Self {
-            events: instances
-                .iter()
-                .map(|instance| instance.pending().clone())
-                .collect(),
-        }
+        let events = instances
+            .iter()
+            .filter_map(|instance| {
+                let event = instance.pending().clone();
+                (!event.deleted).then(|| (instance.clone(), event))
+            })
+            .collect();
+        Self { events }
     }
 
-    pub fn on(&self, date: NaiveDate) -> Vec<&Event> {
+    pub fn on(&self, date: NaiveDate) -> Vec<&(Instance<Event>, Event)> {
         let mut events = self
             .events
             .iter()
-            .filter(|event| event.datetime.date() == date)
+            .filter(|(_, event)| event.datetime.date() == date)
             .collect::<Vec<_>>();
-        events.sort_by_key(|event| event.datetime.time());
+        events.sort_by_key(|(_, event)| event.datetime.time());
         events
-    }
-
-    /// Copies events saved by earlier versions into AIR. Repeating it creates no duplicates.
-    pub fn import(ctx: &mut Context) {
-        let Some(saved) = ctx.hardware.get_cache("coconut_calendar.events") else {
-            return;
-        };
-        let Data::Text(saved) = saved else {
-            panic!("The saved events must be text")
-        };
-        let registry = serde_json::from_str::<Self>(&saved).expect("Invalid saved events");
-        for event in registry.events {
-            Event::create(ctx, event)
-        }
     }
 }
