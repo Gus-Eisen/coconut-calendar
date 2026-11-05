@@ -1,8 +1,9 @@
 use chk::{
-    Context, Display, Flow, Form, FormComplete, FormItem, FormSubmit, FormValidState, Icons,
-    ListItem, NumberVariant, Page, PageType, Review, Root, State, Success, TableItem, Theme, Watch,
+    Action, ActionItem, Bumper, Context, Display, Flow, Form, FormComplete, FormItem, FormSubmit,
+    FormValidState, Icons, ListItem, NumberVariant, Offset, Page, PageType, Review, Root, State,
+    Success, TableItem, Theme, Watch,
 };
-use chrono::{Datelike, Months};
+use chrono::{Datelike, Months, NaiveDate};
 use ramp::prism::air::Instance;
 
 use crate::{Event, EventRegistry};
@@ -26,7 +27,7 @@ impl MonthScreen {
                                 let events = registry.on(day);
                                 let summary = match events.as_slice() {
                                     [] => None,
-                                    [event] => Some(format!(
+                                    [(_, event)] => Some(format!(
                                         "{} {}",
                                         event.datetime().format("%H:%M"),
                                         event.title()
@@ -37,7 +38,7 @@ impl MonthScreen {
                                     &day.day().to_string(),
                                     &day.format("%A").to_string(),
                                     summary.as_deref(),
-                                    None,
+                                    summary.is_some().then(|| DayScreen::flow(day)),
                                 )
                             })
                             .collect();
@@ -57,6 +58,40 @@ impl MonthScreen {
                 )
             },
         ))
+    }
+}
+
+pub struct DayScreen;
+impl DayScreen {
+    pub fn flow(day: NaiveDate) -> Flow {
+        Flow::new(vec![Page::watching(
+            Watch::list::<Event>(),
+            move |_ctx: &mut Context, _theme: &Theme, events: Vec<Instance<Event>>| {
+                let registry = EventRegistry::new(&events);
+                let items = registry
+                    .on(day)
+                    .into_iter()
+                    .map(|(instance, event)| {
+                        let mut instance = instance.clone();
+                        let delete = Action::custom(move |_ctx: &mut Context, _theme: &Theme| {
+                            Event::delete(&mut instance)
+                        });
+                        Display::table(
+                            event.title(),
+                            vec![TableItem::new("Time", &event.datetime().format("%H:%M").to_string())],
+                            Some(vec![ActionItem::new(delete, "Delete", Icons::Delete)]),
+                        )
+                    })
+                    .collect();
+                PageType::display(
+                    &day.format("%A %-d %B").to_string(),
+                    items,
+                    None,
+                    Bumper::None,
+                    Offset::Start,
+                )
+            },
+        )])
     }
 }
 
