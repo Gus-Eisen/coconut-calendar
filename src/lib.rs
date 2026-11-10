@@ -2,8 +2,8 @@ use chk::{App, Assets, ChkTheme, Color, Context, Icons, RootInfo, Theme};
 use prism::drawable::Drawable;
 use ramp::prism;
 
-mod event;
-pub use event::*;
+mod calendar;
+pub use calendar::*;
 mod month;
 pub use month::*;
 
@@ -23,13 +23,8 @@ impl prism::Application for CoconutCalendar {
 
 impl App for CoconutCalendar {
     fn roots(&self, ctx: &mut Context, theme: &Theme) -> Vec<RootInfo> {
-        vec![RootInfo::icon(
-            ctx,
-            theme,
-            Icons::Home,
-            "Home",
-            MonthScreen::root(),
-        )]
+        let home = MonthScreen::root(ctx);
+        vec![RootInfo::icon(ctx, theme, Icons::Home, "Home", home)]
     }
 
     fn theme(&self) -> ChkTheme {
