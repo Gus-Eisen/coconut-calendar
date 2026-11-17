@@ -261,7 +261,8 @@ form:
   date means one occurrence. Blank means no end date.
 - **Times** is a number, 1 to 999: how many times in total. Blank means no
   limit. With Until also set, the error is "Use Until or Times, not both." Both
-  blank means it never ends. Cancelled occurrences (3b) still count.
+  blank means it never ends. Cancelled and moved occurrences (3b) still
+  count, at their original dates.
 - Every, Until and Times use chk's number and date keypads, which show fixed
   hints ("Enter number", "Enter date") and start at "0" for a number. "0"
   counts as blank. What blank means shows on the review instead (Ends:
@@ -282,13 +283,15 @@ form:
 Repeats (with an eighth option, **Doesn't repeat**, last), Every, Until and
 Times, then a "Change Repeat Review" with Current and New tables of the rows
 above. Until is read from the later of the event's start date and today.
-Continue sends `set_recurrence` unless nothing changed, and returns to the
-detail page. As with changing the time, the current value can only appear on
-the review page.
+Continue sends `set_recurrence` unless the rule is unchanged (compared without
+exceptions, since the form's rule never has any), and returns to the detail
+page. As with changing the time, the current value can only appear on the
+review page. Change repeat always changes the whole series, with no Which
+Events? step. If the new rule drops single changes (see "Changing the
+series' time or repeat" under Exceptions), the review adds the line "N single changes will be
+removed." ("1 single change will be removed." for one).
 
-**Edits apply to the whole series in 3a.** Edit details, Change time, Change
-category, Change privacy, links and Delete act on the whole series until 3b
-adds the scope chooser (UI: see 16).
+**Which occurrences an edit changes:** see Exceptions below (step 3b).
 
 #### Exceptions
 
@@ -318,6 +321,9 @@ pub struct Override {
 - **Fields that can't differ per occurrence:** `attendees`, `category`,
   `private` and `recurrence`. Attendees can still answer differently for one
   occurrence through `responses`, for example declining just one Monday.
+  Category and privacy stay series-only because privacy decides who can see
+  an event (step 7), and a per-occurrence privacy would make one event half
+  visible. So Change category and Change privacy have no Which Events? step.
 - **Inviting someone to one occurrence:** the occurrence is *detached*. In one
   message, it's cancelled in the series and a standalone event (no
   `recurrence`) is created with the same details: the series' fields with the
@@ -336,9 +342,28 @@ pub struct Override {
 - **Changing the series later:** an occurrence keeps its overridden fields;
   every other field follows the series. For example, if one Monday was moved to
   Tuesday and the series is then renamed, that occurrence stays on Tuesday and
-  takes the new name. If the series' `timing` or
-  `recurrence` changes so that an exception's original date is no longer an
-  occurrence, that exception no longer applies.
+  takes the new name.
+- **Changing the series' time or repeat:** after `SetTiming` or
+  `SetRecurrence`, `apply` keeps the exceptions whose original date the new
+  rule still picks and **drops** the rest. Kept ones are unchanged (a kept
+  `Changed` keeps its own timing). `SetRecurrence` with `None` drops them all
+  with the rule. Dropping, rather than keeping them stored but ignored, means
+  an old exception can't quietly come back into force if the rule is later
+  changed back; a date the rule picks again is then a plain occurrence. The
+  whole-series Change time and Change repeat reviews warn first: "N single
+  changes will be removed." Cancellations count as single changes.
+- **Same as the series:** each occurrence flow builds the new `Override` from
+  the occurrence's current one plus the edited field. A field set to the
+  series' value is stored as `None`, so it keeps following the series. If that
+  leaves every field `None`, the flow sends `restore_occurrence` instead (and
+  nothing if the occurrence wasn't changed). `apply` doesn't compare with the
+  series; it stores what it's sent.
+- **Moving one occurrence:** Change time > This occurrence can move it to any
+  date the form allows (today to about a year ahead, End Date as usual), even
+  past Until or onto a day that already has an occurrence, which then shows
+  both. It shows on its new date only, and is still keyed by its original date.
+  Each original date has at most one exception, so a move can't duplicate an
+  occurrence.
 - **Original date, not new date:** a Monday occurrence moved to Tuesday is
   still keyed by the Monday. That's how the app knows the Monday occurrence
   shouldn't also appear.
@@ -347,21 +372,31 @@ Exceptions are stored on the series, not as separate events. A change to one
 occurrence is then one message to one instance, and can never get out of step
 with the series.
 
-Every edit or delete of a repeating event offers three choices, as in Google
-Calendar:
+**Which Events? (step 3b, decided 2026-11-17).** On a repeating event, Edit
+details (and the header edit icon), Change time, Add link, a link's Delete and
+Delete first open a one-step radio titled **Which Events?**:
 
-| Choice | What happens |
-| -------- | -------------- |
-| **This event** | Adds or updates the exception for that occurrence. |
-| **This and following events** | Splits the series in one message (see `split_series` in section 2). |
-| **All events** | Changes the series itself. For a delete, the whole event is deleted (`deleted` becomes `true`). |
+| Choice | Subtitle | What happens |
+| -------- | -------- | -------------- |
+| **This occurrence** | "Only Tue 1 Dec" (the tapped occurrence's date) | Adds or updates the exception for that occurrence (`change_occurrence`), or for Delete cancels it (`cancel_occurrence`). |
+| **Whole series** | "Every occurrence" | Changes the series itself, as for an event that doesn't repeat. For Delete, the whole event is deleted (`deleted` becomes `true`). |
 
-In design v1 the choice is a radio page shown *before* the edit flow opens,
-because each edit is its own flow and a bumper holds only two buttons. Its
-submit opens the matching edit flow, or deletes right away (UI: see 16; see
-section 6 for what's still open). A changed occurrence's detail page says it
-was changed, shows the series time next to its own, and has a **Restore to
-series** action (`restore_occurrence`) (UI: see 17).
+- This occurrence is first, so it's the default (chk always selects the first
+  option).
+- The step comes *before* the edit flow, because each edit is its own flow and
+  a bumper holds only two buttons. Its submit opens the chosen flow, or acts
+  right away (Delete > Whole series, a link's Delete) (UI: see 16).
+- Events that don't repeat skip the step. Change category, Change privacy and
+  Change repeat always change the series, with no step.
+- "This and following events" (`split_series`) comes later; see section 6.
+
+A changed occurrence's detail page shows the line "This occurrence was
+changed." above the table, a **Series time** row when its time differs from
+the series' time for that date, and a **Restore** action after the edit
+actions. Restore sends `restore_occurrence` at once; it isn't permanent, so the
+occurrence can be changed again (UI: see 17). If the occurrence is cancelled
+while its page is open (from another device), the page says "This occurrence
+was cancelled." with no actions.
 
 #### `Category`
 
@@ -413,6 +448,26 @@ Helpers for the new-event forms:
 | `time` | `fn time(input: &str) -> Option<NaiveTime>` | Reads an `HH:MM` time (24-hour). `None` if invalid. |
 | `from_states` | `fn from_states(states: &[State]) -> Event` | Builds an `Event` from either new-event form's inputs, reading the timing steps with `Timing::from_states` in the device's time zone. Sets `deleted: false`. The form checks the inputs first, so this panics if they're invalid. It only ever reads form inputs, never AIR data. |
 | `optional` | `fn optional(input: &str) -> Option<String>` | Trims a text. Returns `None` if it's empty. The forms and `apply` both use it, so they share one rule. |
+
+Helpers for occurrences (`date` is always an occurrence's original date). They
+return `Option` where an occurrence can be missing, so a view never unwraps
+one:
+
+| Method | Signature | What it does |
+| -------- | ----------- | -------------- |
+| `series_timing` | `fn series_timing(&self, date: NaiveDate) -> Option<Timing>` | The series' timing moved to `date`, ignoring exceptions. `None` if the rule doesn't pick `date`. An event that doesn't repeat has one, on its start date. |
+| `occurrence` | `fn occurrence(&self, date: NaiveDate) -> Option<Timing>` | The occurrence's effective timing: its own if it was moved, else `series_timing`. `None` if there's none or it was cancelled. |
+| `exception` | `fn exception(&self, date: NaiveDate) -> Option<&Exception>` | The occurrence's exception, if it has one. |
+| `changes` | `fn changes(&self, date: NaiveDate) -> Option<&Override>` | The occurrence's `Override`, if it was changed (not cancelled). |
+| `effective` | `fn effective(&self, date: NaiveDate) -> Option<Event>` | The occurrence as an `Event` of its own: a copy of the series with its `Override` applied, for the detail page and Edit details. `None` if there's none or it was cancelled. |
+| `dropped` | `fn dropped(&self, timing: &Timing, recurrence: Option<&Recurrence>) -> usize` | How many exceptions `apply` would drop if the series became `timing` with `recurrence` (`None`: all of them). For the reviews' warning line. |
+| `dropped_by_timing` | `fn dropped_by_timing(&self, timing: &Timing) -> usize` | `dropped` for a whole-series Change time, whose rule follows the new start as in `SetTiming`. |
+
+`Override` has getters `title`, `timing` and `attachments`, `is_empty`
+(nothing differs), and one setter per field that also takes the series' value
+and stores `None` when they're equal (e.g. `set_title`, `set_timing`).
+`Recurrence` has `exceptions()` and `rule()` (a copy without exceptions, to
+compare with a rule a form built).
 
 ### Methods on `Timing`
 
@@ -513,16 +568,17 @@ That's fine before release, because nobody uses Coconut yet.
 |--------|-----------|--------------|
 | `open` | `fn open(ctx: &mut Context) -> Instance<Calendar>` | Opens the user's own calendar, creating it the first time. It finds the calendar by its own location (`hash(init, signer)`), never by taking the first one in the user's list: once calendars are shared, other people's calendars show up in the same list. |
 | `event` | `fn event(&self, id: EventId) -> Option<&Event>` | The event with `id`, for its detail page. `None` if there's none, or it's deleted. |
-| `on` | `fn on(&self, date: NaiveDate, zone: Tz) -> Vec<Occurrence<'_>>` | Everything happening on `date` in the viewer's time zone `zone`, sorted with all-day events first, then by start time. Includes multi-day events that cover `date`, and each occurrence of repeating events. Leaves out deleted events and cancelled occurrences. |
+| `on` | `fn on(&self, date: NaiveDate, zone: Tz) -> Vec<Occurrence<'_>>` | Everything happening on `date` in the viewer's time zone `zone`, sorted with all-day events first, then by start time. Includes multi-day events that cover `date`, and each occurrence of repeating events. Leaves out deleted events and cancelled occurrences. A moved occurrence shows on its new date, not its original one. |
 
 `Occurrence` is one appearance of an event on a day: the event's `EventId`, a
-reference to the `Event`, the occurrence's original date (needed to change or
-cancel just that occurrence), and its `Override` if it has one. For an event
-that doesn't repeat, there's only one. A moved occurrence appears on its new
-date, not its original one. Since step 3a, `Occurrence` has `date()` (the
-original date, in the event's zone) and `timing()` (this occurrence's own
-`Timing`; the event's `timing` is only the first one's). Views use `timing()`,
-and `on` sorts by it. The `Override` comes with exceptions (step 3b).
+reference to the series `Event`, the occurrence's original date (needed to
+change or cancel just that occurrence), and its own timing. For an event that
+doesn't repeat, there's only one. `Occurrence` has `date()` (the original
+date, in the event's zone), `timing()` (this occurrence's effective `Timing`:
+its own if it was moved; the event's `timing` is only the first one's) and,
+since step 3b, `title()` (its own title if it was renamed). Views use
+`timing()` and `title()`, and `on` sorts by `timing()`. `event()` is the
+series; for every other effective value, use `Event::effective`.
 
 `on` doesn't walk a series from its start. For each event it checks only the
 start dates that could reach `date`: from `date` minus the event's length in
@@ -531,22 +587,29 @@ occurrence into the viewer's zone shifts it by at most 2 days. With `count`,
 the last occurrence is found once per check by stepping through at most
 `count` occurrences, a period at a time, and then treated like `until`.
 
+In that window, original dates that are cancelled or moved (a `Changed` with a
+`timing`) are skipped. A moved occurrence can be any distance from its original
+date, so the window can't find it: each `Changed` with a `timing` is checked on
+its own, and included if its original date is still picked by the rule and its
+own timing covers `date`. That's one check per exception per event per day,
+which is fine because exceptions are few.
+
 **Creating and deleting:**
 
 | Method | Signature | Action | What it does |
 | -------- | ----------- | -------- | -------------- |
 | `create_event` | `fn create_event(calendar: &mut Instance<Calendar>, event: Event)` | `Create` | Gives the event a random `EventId` and sends it to AIR as `CalendarMessage::CreateEvent { id, event: Box<Event> }`. The `Event` is boxed because it's much bigger than the other messages (clippy's `large_enum_variant`). `apply` ignores an event with a blank title or a `Timing` that isn't valid. |
 | `delete_event` | `fn delete_event(calendar: &mut Instance<Calendar>, id: EventId)` | `Delete` | Deletes the whole event. For a repeating event, cancels every occurrence. |
-| `cancel_occurrence` | `fn cancel_occurrence(calendar: &mut Instance<Calendar>, id: EventId, date: NaiveDate)` | `Delete` | Cancels one occurrence of a repeating event, identified by its original date. The others are unaffected. |
+| `cancel_occurrence` | `fn cancel_occurrence(calendar: &mut Instance<Calendar>, id: EventId, date: NaiveDate)` | `Delete` | Cancels one occurrence of a repeating event, identified by its original date, for good. The others are unaffected. Sends `CalendarMessage::CancelOccurrence { id, date }`. It replaces a `Changed` exception; sending it twice does no harm. |
 
 **Changing one occurrence:**
 
 | Method | Signature | Action | What it does |
 | -------- | ----------- | -------- | -------------- |
-| `change_occurrence` | `fn change_occurrence(calendar: &mut Instance<Calendar>, id: EventId, date: NaiveDate, changes: Override)` | The action for each field it changes (e.g. `Time` for `timing`) | Sets the exception for the occurrence on its original date `date`. Replaces any earlier changes to that occurrence. Does nothing if the occurrence is cancelled. |
-| `restore_occurrence` | `fn restore_occurrence(calendar: &mut Instance<Calendar>, id: EventId, date: NaiveDate)` | The actions for the fields it had changed | Removes a `Changed` exception, so the occurrence goes back to matching the series. Does nothing if the occurrence is cancelled. |
-| `detach_occurrence` | `fn detach_occurrence(calendar: &mut Instance<Calendar>, id: EventId, date: NaiveDate)` | `Delete` and `Create` | Turns one occurrence into a standalone event (see "Inviting someone to one occurrence" in section 1). Sends `CalendarMessage::DetachOccurrence { id, date, new_id }`, with a random `new_id` for the new event. |
-| `split_series` | `fn split_series(calendar: &mut Instance<Calendar>, id: EventId, from: NaiveDate, changes: Override)` | `Recurrence`, `Create`, and the action for each field it changes | "This and following events". Sends `CalendarMessage::SplitSeries { id, from, new_id, changes }`, with a random `new_id` for the new series. |
+| `change_occurrence` | `fn change_occurrence(calendar: &mut Instance<Calendar>, id: EventId, date: NaiveDate, changes: Override)` | The action for each field it changes (e.g. `Time` for `timing`) | Sets the exception for the occurrence on its original date `date`. Replaces any earlier changes to that occurrence. Does nothing if the occurrence is cancelled. Sends `CalendarMessage::ChangeOccurrence { id, date, changes }`. |
+| `restore_occurrence` | `fn restore_occurrence(calendar: &mut Instance<Calendar>, id: EventId, date: NaiveDate)` | The actions for the fields it had changed | Removes a `Changed` exception, so the occurrence goes back to matching the series. Does nothing if the occurrence is cancelled. Sends `CalendarMessage::RestoreOccurrence { id, date }`. |
+| `detach_occurrence` | `fn detach_occurrence(calendar: &mut Instance<Calendar>, id: EventId, date: NaiveDate)` | `Delete` and `Create` | Planned for step 6 (invites); not built yet. Turns one occurrence into a standalone event (see "Inviting someone to one occurrence" in section 1). Sends `CalendarMessage::DetachOccurrence { id, date, new_id }`, with a random `new_id` for the new event. |
+| `split_series` | `fn split_series(calendar: &mut Instance<Calendar>, id: EventId, from: NaiveDate, changes: Override)` | `Recurrence`, `Create`, and the action for each field it changes | Planned for later; not built in 3b. "This and following events". Sends `CalendarMessage::SplitSeries { id, from, new_id, changes }`, with a random `new_id` for the new series. |
 
 `split_series` must be one message. As two messages (change `until`, then
 create the new series), the series would silently stop early if the second
@@ -587,6 +650,11 @@ never arrived, and AIR's pending state has no way to report that. When
 appended after `RemoveAttachment` in step 3a. `None` stops the event
 repeating.
 
+Step 3b appended `CancelOccurrence`, `ChangeOccurrence` and
+`RestoreOccurrence`, in that order, after `SetRecurrence`. `Exception` and
+`Override` didn't change, so the contract id stays `CoconutCalendarV2`
+(checked by encoding with the 3a types and decoding with the 3b ones).
+
 **Checking a recurrence.** `Recurrence::is_valid(&self, timing: &Timing) ->
 bool` is the one rule the forms and `apply` share. A recurrence is valid when:
 
@@ -602,36 +670,59 @@ In `apply`:
 
 - `CreateEvent` keeps a valid recurrence. An invalid one, or one with
   exceptions, makes it ignore the whole event.
-- `SetRecurrence` ignores the incoming exceptions and keeps the event's own
-  (empty in 3a; in 3b only their own messages change them). It ignores the
-  message if the result isn't valid.
+- `SetRecurrence` ignores the incoming exceptions and keeps the event's own,
+  since only their own messages change them. It ignores the message if the
+  result isn't valid. Otherwise it drops the exceptions whose original date
+  the new rule no longer picks (see "Changing the series' time or repeat").
+  `None` drops the rule and its exceptions.
 - `SetTiming` on a repeating event keeps the rule meaningful when the start
   date moves: `Monthly` takes the new start's day, `MonthlyWeekday` the new
   start's week and weekday, and a one-day `Weekly` set on the old start's
   weekday (the "same day" option) moves to the new start's weekday. Other
   weekly sets stay. If the result isn't valid (for example `until` is now
   before the start), it ignores the whole message, so Change time's Date step
-  checks this too ("Must be on or before the repeat ends.").
+  checks this too ("Must be on or before the repeat ends."). Otherwise it
+  drops the exceptions whose original date the moved rule no longer picks.
+- `CancelOccurrence`, `ChangeOccurrence` and `RestoreOccurrence` are ignored
+  unless the event exists, isn't deleted, repeats, and its rule picks `date`
+  (with `until` or `count`, ignoring exceptions). So an exception can never be
+  stored for a date that isn't in the series.
+- `ChangeOccurrence` is also ignored if the occurrence is cancelled, `title`
+  is set but blank, `timing` is set but not valid, `responses` isn't empty
+  (until step 6), or nothing is left to change after cleaning. Cleaning trims
+  the text fields with `Event::optional` (a blank one becomes `Some(None)`,
+  "cleared"), and trims the attachment links, drops blank ones and removes
+  duplicates, keeping their order.
+- `RestoreOccurrence` removes a `Changed` exception and does nothing on
+  `Cancelled`. `CreateEvent` still rejects a recurrence with exceptions.
 
 **Editing screens (step 2).** Tapping an event in the day view opens its
 **event detail** page (UI: see 07): a table of Time, Category, Location, Info,
 Private and Video link, the attachment links, and the actions Edit details,
-Change time, Change category, Change privacy and Delete. Since step 3a, the
-Time row is the tapped occurrence's time, a repeating event adds Repeats, On,
-First and Ends rows after Time, and there's a Change repeat action. On the day
-screen, a repeating event's subtitle is its category plus "Repeats". chk can only pre-fill text inputs, so
-editing is split:
+Change time, Change category, Change privacy and Delete. Since step 3a, a
+repeating event adds Repeats, On, First and Ends rows after Time, and there's a
+Change repeat action. Since step 3b, the page shows the tapped occurrence's own
+values (its title, time, location and so on), and on a repeating event the
+edits and Delete first ask Which Events? (see Exceptions in section 1). If an
+edit to the series means the tapped date is no longer an occurrence, the page
+shows the first occurrence. On the day screen, a repeating event's subtitle is
+its category plus "Repeats". chk can only pre-fill text inputs, so editing is
+split:
 
 | Screen | What it changes | How |
 |--------|-----------------|-----|
 | Edit details (UI: see 08) | Title, Location, Info, Video link | One page (`Form::page` / `PageType::edit_and_display`) with a `FormItem::text_with_preset` for each field, filled with the current values. Save stays off until something changes and every field is valid. Calls the setter for each changed field. |
-| Change time (UI: see 09) | `timing` | A flow: Date, Start Time, End Date, End Time, then a review showing the current and new times. Step titles are plain ("Start Time", "End Time"): chk clips longer ones. Date is on or after today; End Date uses the same rule as Last Day (on or after the start, at most 28 days later). Times are typed and shown in the event's own time zone (the `time_zone` in its `Timing`), and the review names it. An all-day event changed to timed uses the device's zone. Calls `set_timing`, unless the timing is unchanged. |
+| Change time (UI: see 09) | `timing` | A flow: Date, Start Time, End Date, End Time, then a review showing the current and new times. Step titles are plain ("Start Time", "End Time"): chk clips longer ones. Date is on or after today; End Date uses the same rule as Last Day (on or after the start, at most 28 days later). Times are typed and shown in the event's own time zone (the `time_zone` in its `Timing`), and the review names it. An all-day event changed to timed uses the device's zone. Calls `set_timing`, unless the timing is unchanged. For one occurrence (3b), Current is the occurrence's own time, there's no Until limit, and it calls `change_occurrence`. |
 | Change to all-day or timed (UI: see 10) | `timing` | A picker like the event-type picker (Timed / All-day, with the current timing in the first option's subtitle), then the matching timing flow. |
 | Change category or privacy (UI: see 11) | `category`, `private` | A one-step radio page: Personal / Work, or Not private / Private. The radio always starts on its first option, so the current value is shown as that option's subtitle. Calls `set_category` or `set_private`. |
-| Add attachment link (UI: see 12) | `attachments` | A text step with a Paste action. Calls `add_attachment`. Each link on the detail page has a Delete action (`remove_attachment`). No file upload. |
+| Add attachment link (UI: see 12) | `attachments` | A text step with a Paste action. Calls `add_attachment`. Each link on the detail page has a Delete action (`remove_attachment`). No file upload. For one occurrence (3b), its list is its own if it has one, else the series'; adding or deleting sets the whole list with `change_occurrence`. |
 | Change repeat (UI: see 15) | `recurrence` | See `Recurrence`. |
 
-Delete on the detail page has no confirmation step and no undo (UI: see 07).
+Delete on an event that doesn't repeat, and Delete > Whole series, have no
+confirmation step and no undo (UI: see 07). Delete > This occurrence first
+shows a "Cancel Occurrence" review (an Occurrence table with Title and Time,
+and "This can't be undone."), because cancelling is permanent; Continue
+cancels it. Both return to the day screen (UI: see 16).
 
 **Answering and proposing:** these depend on who the sender is, not their role.
 
@@ -883,8 +974,8 @@ ownership and permissions model.
   personal events are told apart by `Category` and its text label instead.
 - **Time zones and multi-day events** (see `Timing`).
 - **Repeating events**, with exceptions: any occurrence can be changed or
-  cancelled on its own, as in Google Calendar ("this event", "this and
-  following events", "all events").
+  cancelled on its own, as in Google Calendar ("this occurrence" or "whole
+  series"; "this and following" comes after the first pass).
 - **Editing events** (the editing methods in section 2).
 - **Inviting other Coconut users** (see "Inviting people" in section 2).
 - **Roles, visibility and time proposals** (sections 3 and 4).
@@ -898,7 +989,7 @@ ownership and permissions model.
 | View | Shows |
 |------|-------|
 | Month | chk has no grid component, so it's a list, not a grid: one section per month, for 13 months from `Event::window_start()` (so a date nearly a year ahead is on screen), and one row per day with the day number, the weekday and a summary on the right. A day with one event shows its time (or "All day"), title and category label, e.g. "09:30 Standup · Work". Today is marked with a dot and "Today" in the subtitle. A multi-day event appears on every day it covers. Tapping a day with events opens the day view. The root's one header icon is free (UI: see 01, 19). |
-| Day | Every occurrence on one day, from `Calendar::on`: all-day events first, then the rest by start time. It's a list, not an hour grid. Each row shows the title, the category label (with the location, or that it repeats), and the time in the viewer's time zone (with the date too if it starts or ends on another day). Tapping a row opens the event detail page, which has edit and delete. Editing or deleting an occurrence of a repeating event asks: this event, this and following events, or all events (UI: see 16). A display page can't swipe, so going to another day means going back to the month (UI: see 18). |
+| Day | Every occurrence on one day, from `Calendar::on`: all-day events first, then the rest by start time. It's a list, not an hour grid. Each row shows the title, the category label (with the location, or that it repeats), and the time in the viewer's time zone (with the date too if it starts or ends on another day). Tapping a row opens the event detail page, which has edit and delete. Editing or deleting an occurrence of a repeating event asks Which Events?: This occurrence or Whole series (UI: see 16). A display page can't swipe, so going to another day means going back to the month (UI: see 18). |
 
 **Month summary for a day with several events (planned, likely step 4).** The
 row shows the next event that hasn't ended yet. An event that's in progress
@@ -922,7 +1013,9 @@ change *where* events are sent, not what an `Event` is.
    Repeating option and form (UI: see 13–15).
 
    b. Exceptions: `Exception`, `cancel_occurrence`, `change_occurrence`,
-   `restore_occurrence`, `SplitSeries`, `DetachOccurrence` (UI: see 16, 17).
+   `restore_occurrence`, the Which Events? step and Restore (UI: see 16, 17).
+   `SplitSeries` ("This and following") moves later; `DetachOccurrence` moves
+   to step 6 (invites).
 4. Views: day and month, including the month summary for days with several
    events (UI: see 18, 19).
 5. Attribution and roles, and the People tab (UI: see 20–23).
@@ -981,10 +1074,11 @@ doesn't decide yet. The open questions in sections 2 and 4 still stand.
   last weekday when the start is on the 22nd–28th and also the month's last.
 - **A start date that doesn't match the rule.** Decided 2026-11-17: the first
   occurrence is the first matching date on or after it; the review shows First.
-- **Editing a repeating event in 3a.** Decided 2026-11-17: every edit applies
-  to the whole series until 3b.
-- **Ask the scope before or after editing?** Design v1 asks first (UI: see 16);
-  Google asks after Save. Is asking first OK?
+- **Editing a repeating event in 3a.** Decided 2026-11-17: every edit applied
+  to the whole series until 3b. Superseded by 3b (see Exceptions).
+- **Ask the scope before or after editing?** Decided 2026-11-17: before (Which
+  Events?, then the flow), as design v1 shows (UI: see 16).
+- **"This and following."** Not in 3b; it comes later.
 - **"This and following" on the first occurrence.** The mockup note suggests
   hiding it there, as Google does (UI: see 16). `split_series` from the first
   date would leave an old series that ends before it starts.
