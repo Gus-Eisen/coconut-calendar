@@ -49,3 +49,10 @@ them into the next design version instead.
   when the first occurrence isn't the typed date) and Ends rows, not one long Repeats line,
   because chk clips long values. Change repeat's Repeats list adds "Doesn't repeat" last.
   Step titles are plain ("Start Time", "End Time"); chk clips longer ones. (2026-11-17)
+- **16, 17, 07 Exceptions:** the scope step is titled "Which Events?" and has two choices,
+  This occurrence ("Only Tue 1 Dec") and Whole series ("Every occurrence"); no "This and
+  following" yet. Change category, Change privacy and Change repeat have no scope step (they
+  always change the series). Delete > This occurrence opens a "Cancel Occurrence" review with
+  "This can't be undone." The changed occurrence's action is "Restore", not "Restore to
+  series", and its line is "This occurrence was changed." Plain short titles, as chk clips
+  long ones. (2026-11-17)

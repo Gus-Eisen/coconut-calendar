@@ -10,7 +10,7 @@ use ramp::prism::air::Instance;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::{Calendar, Category, Event, EventId, Recurrence, Repeat, Timing};
+use crate::{Calendar, Category, Event, EventId, Exception, Override, Recurrence, Repeat, Timing};
 
 pub struct MonthScreen;
 impl MonthScreen {
@@ -35,7 +35,7 @@ impl MonthScreen {
                                     [occurrence] => Some(format!(
                                         "{} {}",
                                         DayScreen::time_label(occurrence.timing(), day, zone),
-                                        occurrence.event().title()
+                                        occurrence.title()
                                     )),
                                     occurrences => Some(format!("{} events", occurrences.len())),
                                 };
@@ -87,7 +87,7 @@ impl DayScreen {
                         let time = Self::time_label(occurrence.timing(), day, zone);
                         let detail =
                             EventScreen::flow(calendar.clone(), occurrence.id(), occurrence.date());
-                        ListItem::plain(event.title(), &subtitle, Some(&time), Some(detail))
+                        ListItem::plain(occurrence.title(), &subtitle, Some(&time), Some(detail))
                     })
                     .collect();
                 PageType::display(
@@ -116,27 +116,38 @@ impl DayScreen {
 pub struct EventScreen;
 impl EventScreen {
     /// Rebuilds after every change to the calendar, so it always shows the latest values. `date`
-    /// is the original date of the tapped occurrence; the Time row shows that occurrence, or the
-    /// first one if an edit means there's no longer one on `date`.
+    /// is the original date of the tapped occurrence, and the page shows that occurrence's own
+    /// values. If an edit to the series means there's no longer an occurrence on `date`, it
+    /// shows the first one.
     pub fn flow(calendar: Instance<Calendar>, id: EventId, date: NaiveDate) -> Flow {
         Flow::new(vec![Page::watching(
             Watch::contract(calendar),
             move |_ctx: &mut Context, theme: &Theme, calendar: Instance<Calendar>| {
-                let Some(event) = calendar.pending().event(id).cloned() else {
-                    let deleted = Display::instructions("This event was deleted.");
-                    return PageType::display(
-                        "Event", vec![deleted], None, Bumper::None, Offset::Center,
-                    );
+                let Some(series) = calendar.pending().event(id).cloned() else {
+                    return Self::gone("This event was deleted.");
                 };
+                if series.exception(date) == Some(&Exception::Cancelled) {
+                    return Self::gone("This occurrence was cancelled.");
+                }
+                let start = series.timing().start_date();
+                let date = match series.series_timing(date) {
+                    Some(_) => date,
+                    None => series.recurrence().and_then(|rule| rule.first(start)).unwrap_or(start),
+                };
+                let event = series.effective(date).unwrap_or_else(|| series.clone());
+                let changed = series.changes(date).is_some();
                 let zone = Timing::device_zone();
-                let timing = event.occurrence(date).unwrap_or(*event.timing());
-                let start = event.timing().start_date();
-                let repeat = match event.recurrence() {
+
+                let series_time = series.series_timing(date)
+                    .filter(|timing| changed && timing != event.timing())
+                    .map(|timing| ("Series time", Self::when(&timing, zone)));
+                let repeat = match series.recurrence() {
                     Some(recurrence) => ChangeRepeat::rows(Some(recurrence), start),
                     None => vec![],
                 };
                 let rows = [
-                    vec![("Time", Self::when(&timing, zone))],
+                    [Some(("Time", Self::when(event.timing(), zone))), series_time]
+                        .into_iter().flatten().collect(),
                     repeat,
                     [
                         Some(("Category", event.category().label().to_string())),
@@ -147,26 +158,49 @@ impl EventScreen {
                     ].into_iter().flatten().collect(),
                 ];
 
-                let edit = Flow::from_form(Self::edit_details(calendar.clone(), id, &event));
-                let header_edit = edit.clone();
-                let mut deleting = calendar.clone();
-                let delete = Action::custom(move |ctx: &mut Context, theme: &Theme| {
-                    Calendar::delete_event(&mut deleting, id);
-                    Self::back().run(ctx, theme);
-                });
+                let header_edit = Self::edit(theme, &calendar, id, date, &series);
+                let edit = Action::flow(header_edit.clone());
+                let time = Self::scoped(
+                    theme, &series, date,
+                    Self::open({
+                        let (calendar, series) = (calendar.clone(), series.clone());
+                        move |theme: &Theme| {
+                            let scope = Scope::Occurrence(date);
+                            ChangeTime::picker(theme, calendar.clone(), id, &series, scope)
+                        }
+                    }),
+                    Self::open({
+                        let (calendar, series) = (calendar.clone(), series.clone());
+                        move |theme: &Theme| {
+                            ChangeTime::picker(theme, calendar.clone(), id, &series, Scope::Series)
+                        }
+                    }),
+                );
                 let forms = [
-                    ("Change time", ChangeTime::picker(theme, calendar.clone(), id, &event)),
-                    ("Change repeat", ChangeRepeat::form(theme, calendar.clone(), id, &event)),
-                    ("Change category", Self::category(theme, calendar.clone(), id, &event)),
-                    ("Change privacy", Self::privacy(theme, calendar.clone(), id, &event)),
+                    ("Change repeat", ChangeRepeat::form(theme, calendar.clone(), id, &series)),
+                    ("Change category", Self::category(theme, calendar.clone(), id, &series)),
+                    ("Change privacy", Self::privacy(theme, calendar.clone(), id, &series)),
                 ];
-                let actions = [ActionItem::new(Action::flow(edit), "Edit details", Icons::Edit)]
+                let mut restoring = calendar.clone();
+                let restore = Action::custom(move |_ctx: &mut Context, _theme: &Theme| {
+                    Calendar::restore_occurrence(&mut restoring, id, date)
+                });
+                let actions = [
+                    ActionItem::new(edit, "Edit details", Icons::Edit),
+                    ActionItem::new(time, "Change time", Icons::Edit),
+                ]
                     .into_iter()
                     .chain(forms.into_iter().map(|(label, form)| {
                         ActionItem::new(Action::flow(Flow::from_form(form)), label, Icons::Edit)
                     }))
-                    .chain([ActionItem::new(delete, "Delete", Icons::Delete)])
+                    .chain(changed.then(|| ActionItem::new(restore, "Restore", Icons::Back)))
+                    .chain([ActionItem::new(
+                        Self::delete(theme, &calendar, id, date, &series), "Delete", Icons::Delete,
+                    )])
                     .collect();
+                let changed_line = changed.then(|| {
+                    Display::instructions("This occurrence was changed.")
+                });
                 let table = Display::table(
                     "Event",
                     rows.into_iter().flatten()
@@ -174,19 +208,59 @@ impl EventScreen {
                     Some(actions),
                 );
 
-                let add_link = Self::add_link(theme, calendar.clone(), id);
-                let add_link = Action::flow(Flow::from_form(add_link));
-                let attachments = Display::data_list(
+                let attachments = event.attachments().to_vec();
+                let add_link = Self::scoped(
+                    theme, &series, date,
+                    Self::open({
+                        let (calendar, attachments) = (calendar.clone(), attachments.clone());
+                        move |theme: &Theme| {
+                            let (mut calendar, mut links) = (calendar.clone(), attachments.clone());
+                            Self::add_link(theme, move |link: String| {
+                                if !links.contains(&link) { links.push(link); }
+                                let links = links.clone();
+                                Self::change(&mut calendar, id, date, |changes, series| {
+                                    changes.set_attachments(links, series.attachments())
+                                })
+                            })
+                        }
+                    }),
+                    Self::open({
+                        let calendar = calendar.clone();
+                        move |theme: &Theme| {
+                            let mut calendar = calendar.clone();
+                            Self::add_link(theme, move |link: String| {
+                                Calendar::add_attachment(&mut calendar, id, link)
+                            })
+                        }
+                    }),
+                );
+                let attachments_list = Display::data_list(
                     "Attachments",
-                    event.attachments().is_empty().then_some("No links yet."),
+                    attachments.is_empty().then_some("No links yet."),
                     vec![],
                     Some(vec![ActionItem::new(add_link, "Add link", Icons::Link)]),
                 );
-                let links = event.attachments().iter().map(|link| {
-                    let (mut calendar, removed) = (calendar.clone(), link.clone());
-                    let remove = Action::custom(move |_ctx: &mut Context, _theme: &Theme| {
-                        Calendar::remove_attachment(&mut calendar, id, removed.clone())
-                    });
+                let links = attachments.iter().map(|link| {
+                    let remove = Self::scoped(
+                        theme, &series, date,
+                        {
+                            let mut calendar = calendar.clone();
+                            let kept = attachments.iter().filter(|kept| *kept != link)
+                                .cloned().collect::<Vec<_>>();
+                            move |_ctx: &mut Context, _theme: &Theme| {
+                                let kept = kept.clone();
+                                Self::change(&mut calendar, id, date, |changes, series| {
+                                    changes.set_attachments(kept, series.attachments())
+                                })
+                            }
+                        },
+                        {
+                            let (mut calendar, removed) = (calendar.clone(), link.clone());
+                            move |_ctx: &mut Context, _theme: &Theme| {
+                                Calendar::remove_attachment(&mut calendar, id, removed.clone())
+                            }
+                        },
+                    );
                     let delete = ActionItem::new(remove, "Delete", Icons::Delete);
                     Display::cta(link, None, "Link", vec![delete])
                 });
@@ -196,13 +270,20 @@ impl EventScreen {
                 });
                 PageType::display(
                     event.title(),
-                    [table, attachments].into_iter().chain(links).collect(),
+                    changed_line.into_iter().chain([table, attachments_list]).chain(links)
+                        .collect(),
                     Some((Icons::Edit, header)),
                     Bumper::None,
                     Offset::Start,
                 )
             },
         )])
+    }
+
+    /// The page once there's nothing left to show.
+    fn gone(message: &str) -> PageType {
+        let message = Display::instructions(message);
+        PageType::display("Event", vec![message], None, Bumper::None, Offset::Center)
     }
 
     /// The detail page's time in `zone`: "14:00–15:00, Tue 3 Nov", or "All day, Tue 3 Nov".
@@ -229,6 +310,144 @@ impl EventScreen {
     /// after Delete.
     fn back() -> FormComplete { FormComplete::Return(Box::new(|_: &mut Context, _: &Theme| {})) }
 
+    /// A callback that opens the form `make` builds. It runs after the scope step has closed,
+    /// so the form opens on top of the detail page.
+    fn open(
+        make: impl Fn(&Theme) -> Form + Clone + 'static,
+    ) -> impl FnMut(&mut Context, &Theme) + Clone + 'static {
+        move |ctx: &mut Context, theme: &Theme| {
+            Flow::from_form(make(theme)).build(ctx, theme)(ctx, theme)
+        }
+    }
+
+    /// On a repeating event, the "Which Events?" step (`scope`). An event that doesn't repeat
+    /// runs `whole` straight away, as before step 3b.
+    fn scoped(
+        theme: &Theme, series: &Event, date: NaiveDate,
+        this: impl FnMut(&mut Context, &Theme) + Clone + 'static,
+        whole: impl FnMut(&mut Context, &Theme) + Clone + 'static,
+    ) -> Action {
+        match series.recurrence() {
+            Some(_) => Action::flow(Self::scope(theme, date, this, whole)),
+            None => Action::custom(whole),
+        }
+    }
+
+    /// The "Which Events?" step: it runs `this` (This occurrence) or `whole` (Whole series) once
+    /// it closes. chk always selects the first option, so This occurrence is first.
+    fn scope(
+        theme: &Theme, date: NaiveDate,
+        this: impl FnMut(&mut Context, &Theme) + Clone + 'static,
+        whole: impl FnMut(&mut Context, &Theme) + Clone + 'static,
+    ) -> Flow {
+        let submit = Box::new(move |_ctx: &mut Context, states: &Vec<State>| {
+            let [State::Enumerator(index)] = states.as_slice() else { unreachable!() };
+            match index {
+                0 => FormComplete::Return(Box::new(this.clone())),
+                _ => FormComplete::Return(Box::new(whole.clone())),
+            }
+        }) as Box<dyn FormSubmit>;
+        let only = format!("Only {}", date.format("%a %-d %b"));
+        let options =
+            vec![("This occurrence", only.as_str()), ("Whole series", "Every occurrence")];
+        let scope = FormItem::enumerator("Which Events?", options);
+        Flow::from_form(Form::flow(theme, vec![scope], None, None, submit))
+    }
+
+    /// Sends the occurrence's changes with `edit` applied, starting from its current ones.
+    /// `edit` also gets the series, whose values mean "same as the series". If nothing is left
+    /// that differs, it restores the occurrence instead. A cancelled occurrence is left alone.
+    fn change(
+        calendar: &mut Instance<Calendar>, id: EventId, date: NaiveDate,
+        edit: impl FnOnce(&mut Override, &Event),
+    ) {
+        let Some(series) = calendar.pending().event(id).cloned() else { return };
+        let current = match series.exception(date) {
+            Some(Exception::Cancelled) => return,
+            Some(Exception::Changed(changes)) => Some(changes.clone()),
+            None => None,
+        };
+        let mut changes = current.clone().unwrap_or_default();
+        edit(&mut changes, &series);
+        match changes.is_empty() {
+            true if current.is_some() => Calendar::restore_occurrence(calendar, id, date),
+            true => {}
+            false if current.as_ref() != Some(&changes) => {
+                Calendar::change_occurrence(calendar, id, date, changes)
+            }
+            false => {}
+        }
+    }
+
+    /// Edit details, as a flow because the header's edit icon opens it too: the scope step
+    /// first on a repeating event.
+    fn edit(
+        theme: &Theme, calendar: &Instance<Calendar>, id: EventId, date: NaiveDate, series: &Event,
+    ) -> Flow {
+        let whole = {
+            let (calendar, series) = (calendar.clone(), series.clone());
+            Self::open(move |_theme: &Theme| Self::edit_details(calendar.clone(), id, &series))
+        };
+        let this = {
+            let (calendar, series) = (calendar.clone(), series.clone());
+            Self::open(move |_theme: &Theme| {
+                Self::edit_occurrence(calendar.clone(), id, date, &series)
+            })
+        };
+        match series.recurrence() {
+            Some(_) => Self::scope(theme, date, this, whole),
+            None => Flow::from_form(Self::edit_details(calendar.clone(), id, series)),
+        }
+    }
+
+    /// Delete. Whole series deletes the event at once, as before; This occurrence opens the
+    /// Cancel Occurrence review first, because cancelling can't be undone. Both end on the day
+    /// screen.
+    fn delete(
+        theme: &Theme, calendar: &Instance<Calendar>, id: EventId, date: NaiveDate, series: &Event,
+    ) -> Action {
+        let whole = {
+            let mut calendar = calendar.clone();
+            move |ctx: &mut Context, theme: &Theme| {
+                Calendar::delete_event(&mut calendar, id);
+                Self::back().run(ctx, theme);
+            }
+        };
+        let this = {
+            let (calendar, series) = (calendar.clone(), series.clone());
+            move |ctx: &mut Context, theme: &Theme| {
+                let flow = Self::cancel(calendar.clone(), id, date, &series);
+                flow.clone().build(ctx, theme)(ctx, theme)
+            }
+        };
+        Self::scoped(theme, series, date, this, whole)
+    }
+
+    /// The Cancel Occurrence review: the occurrence's time and a warning. Continue cancels it
+    /// and returns to the day screen.
+    fn cancel(mut calendar: Instance<Calendar>, id: EventId, date: NaiveDate, series: &Event) -> Flow {
+        let timing = series.occurrence(date).unwrap_or(*series.timing());
+        let when = Self::when(&timing, Timing::device_zone());
+        let title = series.effective(date)
+            .map(|event| event.title().to_string()).unwrap_or_default();
+        let review = move |_states: &Vec<State>| {
+            let rows = vec![TableItem::new("Title", &title), TableItem::new("Time", &when)];
+            vec![
+                Display::table("Occurrence", rows, None),
+                Display::instructions("This can't be undone."),
+            ]
+        };
+        let submit = Box::new(move |_ctx: &mut Context, _states: &Vec<State>| {
+            Calendar::cancel_occurrence(&mut calendar, id, date);
+            // Closes the review, then the detail page under it.
+            FormComplete::Return(Box::new(|ctx: &mut Context, theme: &Theme| {
+                Self::back().run(ctx, theme)
+            }))
+        }) as Box<dyn FormSubmit>;
+        let page = PageType::review("Cancel Occurrence", Box::new(review), submit);
+        Flow::new(vec![Page::Static(Box::new(page))])
+    }
+
     /// Save sends one message per field that changed, comparing after trimming.
     fn edit_details(mut calendar: Instance<Calendar>, id: EventId, event: &Event) -> Form {
         let save = Box::new(move |_ctx: &mut Context, states: &Vec<State>| {
@@ -254,7 +473,32 @@ impl EventScreen {
             }
             FormComplete::None
         }) as Box<dyn FormSubmit>;
+        Self::details_page(event, save)
+    }
 
+    /// Edit details for one occurrence: filled with its own values. Save sends them as one
+    /// `change_occurrence`; a field equal to the series' is stored as "same as the series".
+    fn edit_occurrence(mut calendar: Instance<Calendar>, id: EventId, date: NaiveDate, series: &Event) -> Form {
+        let event = series.effective(date).unwrap_or_else(|| series.clone());
+        let save = Box::new(move |_ctx: &mut Context, states: &Vec<State>| {
+            let [State::Text(title), State::Text(location), State::Text(info), State::Text(link)] =
+                states.as_slice() else { unreachable!() };
+            let Some(title) = Event::optional(title) else { return FormComplete::None };
+            let (location, info, link) =
+                (Event::optional(location), Event::optional(info), Event::optional(link));
+            Self::change(&mut calendar, id, date, |changes, series| {
+                changes.set_title(title, series.title());
+                changes.set_location(location, series.location());
+                changes.set_info(info, series.info());
+                changes.set_video_link(link, series.video_link());
+            });
+            FormComplete::None
+        }) as Box<dyn FormSubmit>;
+        Self::details_page(&event, save)
+    }
+
+    /// The Edit details page, filled with `event`'s values.
+    fn details_page(event: &Event, save: Box<dyn FormSubmit>) -> Form {
         let optional = |label: &str, value: Option<&str>| {
             FormItem::text_with_preset(
                 label, value.unwrap_or(""), None,
@@ -310,11 +554,11 @@ impl EventScreen {
         Form::flow(theme, vec![FormItem::enumerator(title, options)], None, None, submit)
     }
 
-    /// Links are plain text: anything that isn't blank is accepted.
-    fn add_link(theme: &Theme, mut calendar: Instance<Calendar>, id: EventId) -> Form {
+    /// Links are plain text: anything that isn't blank is accepted. `save` gets it trimmed.
+    fn add_link(theme: &Theme, mut save: impl FnMut(String) + Clone + 'static) -> Form {
         let submit = Box::new(move |_ctx: &mut Context, states: &Vec<State>| {
             let [State::Text(link)] = states.as_slice() else { unreachable!() };
-            Calendar::add_attachment(&mut calendar, id, link.clone());
+            if let Some(link) = Event::optional(link) { save(link); }
             Self::back()
         }) as Box<dyn FormSubmit>;
 
@@ -326,6 +570,13 @@ impl EventScreen {
         );
         Form::flow(theme, vec![link], None, None, submit)
     }
+}
+
+/// What an edit applies to: the whole series, or one occurrence by its original date.
+#[derive(Clone, Copy)]
+enum Scope {
+    Series,
+    Occurrence(NaiveDate),
 }
 
 pub struct NewEvent;
@@ -587,37 +838,44 @@ impl EventKind {
 /// Timed steps use the event's own time zone, so an event set in Tokyo stays in Tokyo time.
 struct ChangeTime;
 impl ChangeTime {
-    /// A repeating event changes as a whole series (until step 3b): the times are the series'
-    /// first occurrence's, and its start can't move past the repeat's Until.
-    fn picker(theme: &Theme, calendar: Instance<Calendar>, id: EventId, event: &Event) -> Form {
-        let current = *event.timing();
-        let until = event.recurrence().and_then(|recurrence| recurrence.until());
+    /// For the whole series, the times are the first occurrence's, and its start can't move
+    /// past the repeat's Until. One occurrence starts from its own times and can move to any
+    /// date the form allows, even past Until.
+    fn picker(theme: &Theme, calendar: Instance<Calendar>, id: EventId, series: &Event, scope: Scope) -> Form {
+        let (current, latest) = match scope {
+            Scope::Series => {
+                (*series.timing(), series.recurrence().and_then(|recurrence| recurrence.until()))
+            }
+            Scope::Occurrence(date) => (series.occurrence(date).unwrap_or(*series.timing()), None),
+        };
+        let series_now = series.clone();
         let submit = Box::new(move |_ctx: &mut Context, states: &Vec<State>| {
             let [State::Enumerator(index)] = states.as_slice() else { unreachable!() };
-            let (kind, calendar) = (EventKind::options()[*index], calendar.clone());
+            let (kind, calendar, series) =
+                (EventKind::options()[*index], calendar.clone(), series_now.clone());
             FormComplete::Return(Box::new(move |ctx: &mut Context, theme: &Theme| {
-                let times = FormTimes { latest: until, ..FormTimes::default() };
+                let times = FormTimes { latest, ..FormTimes::default() };
                 let times = Rc::new(RefCell::new(times));
+                let edit = Edit {
+                    calendar: calendar.clone(), id, series: series.clone(), scope, current,
+                };
                 let form = match kind {
-                    EventKind::AllDay => Self::all_day(theme, calendar.clone(), id, current, times),
-                    _ => Self::timed(theme, calendar.clone(), id, current, times),
+                    EventKind::AllDay => Self::all_day(theme, edit, times),
+                    _ => Self::timed(theme, edit, times),
                 };
                 Flow::from_form(form).build(ctx, theme)(ctx, theme)
             }))
         }) as Box<dyn FormSubmit>;
 
-        let now = format!("Now: {}", EventScreen::when(event.timing(), Timing::device_zone()));
+        let now = format!("Now: {}", EventScreen::when(&current, Timing::device_zone()));
         let kinds = vec![("Timed", now.as_str()), ("All-day", "Whole days, no times")];
         Form::flow(theme, vec![FormItem::enumerator("Timing", kinds)], None, None, submit)
     }
 
     /// An all-day event has no zone of its own, so it becomes timed in the device's zone. The
     /// step titles don't name the zone (chk cuts long titles short); the review does.
-    fn timed(
-        theme: &Theme, calendar: Instance<Calendar>, id: EventId, current: Timing,
-        times: Rc<RefCell<FormTimes>>,
-    ) -> Form {
-        let zone = match current {
+    fn timed(theme: &Theme, edit: Edit, times: Rc<RefCell<FormTimes>>) -> Form {
+        let zone = match edit.current {
             Timing::Timed { time_zone, .. } => time_zone,
             Timing::AllDay { .. } => Timing::device_zone(),
         };
@@ -645,32 +903,43 @@ impl ChangeTime {
             FormTimes::end_date_step("End Date", times),
             end_time,
         ];
-        Self::flow(theme, calendar, id, current, zone, steps)
+        Self::flow(theme, edit, zone, steps)
     }
 
-    fn all_day(
-        theme: &Theme, calendar: Instance<Calendar>, id: EventId, current: Timing,
-        times: Rc<RefCell<FormTimes>>,
-    ) -> Form {
+    fn all_day(theme: &Theme, edit: Edit, times: Rc<RefCell<FormTimes>>) -> Form {
         let steps = vec![
             FormTimes::date_step("First Day", times.clone()),
             FormTimes::end_date_step("Last Day", times),
         ];
-        Self::flow(theme, calendar, id, current, Timing::device_zone(), steps)
+        Self::flow(theme, edit, Timing::device_zone(), steps)
     }
 
-    /// Continue sends `set_timing` unless nothing changed, then goes back to the detail page.
-    fn flow(
-        theme: &Theme, mut calendar: Instance<Calendar>, id: EventId, current: Timing, zone: Tz,
-        steps: Vec<FormItem>,
-    ) -> Form {
+    /// Continue sends `set_timing` (whole series) or `change_occurrence` (one occurrence)
+    /// unless nothing changed, then goes back to the detail page. A whole-series review warns
+    /// about single changes the new time drops.
+    fn flow(theme: &Theme, edit: Edit, zone: Tz, steps: Vec<FormItem>) -> Form {
+        let Edit { mut calendar, id, series, scope, current } = edit;
         let review = move |states: &Vec<State>| {
             let new = Timing::from_states(states, zone);
-            vec![Self::table("Current", &current), Self::table("New", &new)]
+            let dropped = match scope {
+                Scope::Series => series.dropped_by_timing(&new),
+                Scope::Occurrence(_) => 0,
+            };
+            [Self::table("Current", &current), Self::table("New", &new)].into_iter()
+                .chain(ChangeRepeat::warning(dropped))
+                .collect()
         };
         let submit = Box::new(move |_ctx: &mut Context, states: &Vec<State>| {
             let timing = Timing::from_states(states, zone);
-            if timing != current { Calendar::set_timing(&mut calendar, id, timing); }
+            match scope {
+                _ if timing == current => {}
+                Scope::Series => Calendar::set_timing(&mut calendar, id, timing),
+                Scope::Occurrence(date) => {
+                    EventScreen::change(&mut calendar, id, date, |changes, series| {
+                        changes.set_timing(timing, series.series_timing(date))
+                    })
+                }
+            }
             EventScreen::back()
         }) as Box<dyn FormSubmit>;
         Form::flow(theme, steps, Some(Review::new("Change Time Review", review)), None, submit)
@@ -698,25 +967,40 @@ impl ChangeTime {
     }
 }
 
+/// What a Change time flow edits, and the timing it starts from.
+#[derive(Clone)]
+struct Edit {
+    calendar: Instance<Calendar>,
+    id: EventId,
+    series: Event,
+    scope: Scope,
+    current: Timing,
+}
+
 /// Change repeat: Repeats (with "Doesn't repeat" last), Every, Until and Times, then a Current
 /// / New review. Until is read from the later of the series' start and today, so it can't land
 /// in the past for a series that started earlier.
 struct ChangeRepeat;
 impl ChangeRepeat {
     fn form(theme: &Theme, mut calendar: Instance<Calendar>, id: EventId, event: &Event) -> Form {
-        let current = event.recurrence().cloned();
+        // Compared without exceptions, as the form's rule never has any.
+        let current = event.recurrence().map(Recurrence::rule);
         let start = event.timing().start_date();
         let earliest = start.max(Local::now().date_naive());
         let times = FormTimes { date: Some(earliest), ..FormTimes::default() };
         let times = Rc::new(RefCell::new(times));
 
-        let review_current = current.clone();
+        let (review_current, series) = (current.clone(), event.clone());
         let review = move |states: &Vec<State>| {
             let new = Recurrence::from_states(states, start, earliest);
-            vec![
+            let dropped = match new == review_current {
+                true => 0,
+                false => series.dropped(series.timing(), new.as_ref()),
+            };
+            [
                 Self::table("Current", review_current.as_ref(), start),
                 Self::table("New", new.as_ref(), start),
-            ]
+            ].into_iter().chain(Self::warning(dropped)).collect()
         };
         let submit = Box::new(move |_ctx: &mut Context, states: &Vec<State>| {
             let new = Recurrence::from_states(states, start, earliest);
@@ -725,6 +1009,18 @@ impl ChangeRepeat {
         }) as Box<dyn FormSubmit>;
         let steps = FormTimes::repeat_steps(times, true);
         Form::flow(theme, steps, Some(Review::new("Change Repeat Review", review)), None, submit)
+    }
+
+    /// The line a whole-series review shows when the change drops single changes; Change time
+    /// uses it too.
+    fn warning(dropped: usize) -> Option<Display> {
+        match dropped {
+            0 => None,
+            1 => Some(Display::instructions("1 single change will be removed.")),
+            dropped => {
+                Some(Display::instructions(&format!("{dropped} single changes will be removed.")))
+            }
+        }
     }
 
     fn table(label: &str, recurrence: Option<&Recurrence>, start: NaiveDate) -> Display {

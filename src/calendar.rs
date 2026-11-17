@@ -243,6 +243,20 @@ impl Recurrence {
     pub fn interval(&self) -> u16 { self.interval }
     pub fn until(&self) -> Option<NaiveDate> { self.until }
     pub fn count(&self) -> Option<u16> { self.count }
+    pub fn exceptions(&self) -> &BTreeMap<NaiveDate, Exception> { &self.exceptions }
+
+    /// The rule without its exceptions, to compare with a rule a form built (forms never set
+    /// exceptions).
+    pub fn rule(&self) -> Recurrence { Recurrence { exceptions: BTreeMap::new(), ..self.clone() } }
+
+    /// Keeps only the exceptions whose original date this rule still picks (from `start`).
+    /// A dropped cancellation's date is no longer in the series, so nothing comes back.
+    fn pruned(mut self, start: NaiveDate) -> Recurrence {
+        let last = self.last(start);
+        let rule = self.clone();
+        self.exceptions.retain(|date, _| rule.occurs_on(*date, start, last));
+        self
+    }
 
     /// The rule `apply` and the forms share. Expects weekly days already `normalised`.
     pub fn is_valid(&self, timing: &Timing) -> bool {
@@ -594,7 +608,7 @@ pub enum Exception {
 }
 
 /// What's different about one occurrence. `None` means "same as the series".
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Override {
     title: Option<String>,
     timing: Option<Timing>,
@@ -603,6 +617,74 @@ pub struct Override {
     video_link: Option<Option<String>>,
     attachments: Option<Vec<String>>,
     responses: BTreeMap<Name, Response>,
+}
+
+impl Override {
+    pub fn title(&self) -> Option<&str> { self.title.as_deref() }
+    pub fn timing(&self) -> Option<&Timing> { self.timing.as_ref() }
+    pub fn attachments(&self) -> Option<&[String]> { self.attachments.as_deref() }
+
+    /// Nothing differs from the series.
+    pub fn is_empty(&self) -> bool { *self == Override::default() }
+
+    // Each setter takes the series' value too: a value equal to it is stored as `None` ("same
+    // as the series"), so the occurrence keeps following the series for that field.
+
+    pub fn set_title(&mut self, title: String, series: &str) {
+        self.title = (title != series).then_some(title);
+    }
+
+    pub fn set_timing(&mut self, timing: Timing, series: Option<Timing>) {
+        self.timing = (Some(timing) != series).then_some(timing);
+    }
+
+    pub fn set_location(&mut self, location: Option<String>, series: Option<&str>) {
+        self.location = (location.as_deref() != series).then_some(location);
+    }
+
+    pub fn set_info(&mut self, info: Option<String>, series: Option<&str>) {
+        self.info = (info.as_deref() != series).then_some(info);
+    }
+
+    pub fn set_video_link(&mut self, link: Option<String>, series: Option<&str>) {
+        self.video_link = (link.as_deref() != series).then_some(link);
+    }
+
+    pub fn set_attachments(&mut self, attachments: Vec<String>, series: &[String]) {
+        self.attachments = (attachments != series).then_some(attachments);
+    }
+
+    /// Trims the text fields as the series setters do. `None` if nothing is left to change, or
+    /// a field can't be stored (a blank title, an invalid timing, or responses before step 6).
+    fn normalised(self) -> Option<Override> {
+        let text = |field: Option<Option<String>>| {
+            field.map(|value| value.as_deref().and_then(Event::optional))
+        };
+        let title = match self.title {
+            Some(title) => Some(Event::optional(&title)?),
+            None => None,
+        };
+        if self.timing.is_some_and(|timing| !timing.is_valid()) || !self.responses.is_empty() {
+            return None;
+        }
+        let attachments = self.attachments.map(|links| {
+            let mut kept: Vec<String> = vec![];
+            for link in links.iter().filter_map(|link| Event::optional(link)) {
+                if !kept.contains(&link) { kept.push(link); }
+            }
+            kept
+        });
+        let changes = Override {
+            title,
+            timing: self.timing,
+            location: text(self.location),
+            info: text(self.info),
+            video_link: text(self.video_link),
+            attachments,
+            responses: BTreeMap::new(),
+        };
+        (!changes.is_empty()).then_some(changes)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -692,15 +774,81 @@ impl Event {
         (!input.is_empty()).then(|| input.to_string())
     }
 
-    /// The timing of the occurrence that would normally start on `date` (its original date), or
-    /// `None` if there's none. An event that doesn't repeat has one, on its start date.
-    pub fn occurrence(&self, date: NaiveDate) -> Option<Timing> {
+    /// The series' timing for the occurrence whose original date is `date`, ignoring any
+    /// exception, or `None` if the rule doesn't pick `date`. An event that doesn't repeat has
+    /// one, on its start date.
+    pub fn series_timing(&self, date: NaiveDate) -> Option<Timing> {
         let start = self.timing.start_date();
         let Some(recurrence) = &self.recurrence else {
             return (date == start).then_some(self.timing);
         };
         if !recurrence.occurs_on(date, start, recurrence.last(start)) { return None; }
         self.timing.moved_to(date)
+    }
+
+    /// The exception on the occurrence whose original date is `date`, if it has one.
+    pub fn exception(&self, date: NaiveDate) -> Option<&Exception> {
+        self.recurrence.as_ref()?.exceptions.get(&date)
+    }
+
+    /// The occurrence's own changes, if it was changed (not cancelled).
+    pub fn changes(&self, date: NaiveDate) -> Option<&Override> {
+        match self.exception(date)? {
+            Exception::Changed(changes) => Some(changes),
+            Exception::Cancelled => None,
+        }
+    }
+
+    /// The occurrence's effective timing: its own if it was moved, else the series' moved to
+    /// `date`. `None` if there's no such occurrence or it was cancelled.
+    pub fn occurrence(&self, date: NaiveDate) -> Option<Timing> {
+        let series = self.series_timing(date)?;
+        match self.exception(date) {
+            Some(Exception::Cancelled) => None,
+            Some(Exception::Changed(changes)) => Some(changes.timing.unwrap_or(series)),
+            None => Some(series),
+        }
+    }
+
+    /// The occurrence as an event of its own: the series' fields with its `Override` applied
+    /// (the views show these). `None` if there's no such occurrence or it was cancelled.
+    pub fn effective(&self, date: NaiveDate) -> Option<Event> {
+        let timing = self.occurrence(date)?;
+        let mut event = Event { timing, ..self.clone() };
+        let Some(changes) = self.changes(date) else { return Some(event) };
+        if let Some(title) = &changes.title { event.title = title.clone(); }
+        if let Some(location) = &changes.location { event.location = location.clone(); }
+        if let Some(info) = &changes.info { event.info = info.clone(); }
+        if let Some(link) = &changes.video_link { event.video_link = link.clone(); }
+        if let Some(attachments) = &changes.attachments { event.attachments = attachments.clone(); }
+        Some(event)
+    }
+
+    /// The occurrence's title: its own if it was renamed, else the series'.
+    fn title_on(&self, date: NaiveDate) -> &str {
+        self.changes(date).and_then(Override::title).unwrap_or(&self.title)
+    }
+
+    /// The repeat rule once the series' timing becomes `timing` (see `Recurrence::moved`).
+    fn retimed(&self, timing: &Timing) -> Option<Recurrence> {
+        let (from, to) = (self.timing.start_date(), timing.start_date());
+        self.recurrence.as_ref().map(|recurrence| recurrence.moved(from, to))
+    }
+
+    /// How many single changes `apply` would drop if the series became `timing` with the
+    /// rule `recurrence`: those whose original date the new rule no longer picks. `None` for
+    /// `recurrence` means it stops repeating, which drops them all.
+    pub fn dropped(&self, timing: &Timing, recurrence: Option<&Recurrence>) -> usize {
+        let Some(current) = &self.recurrence else { return 0 };
+        let start = timing.start_date();
+        let Some(recurrence) = recurrence else { return current.exceptions.len() };
+        let last = recurrence.last(start);
+        current.exceptions.keys().filter(|date| !recurrence.occurs_on(**date, start, last)).count()
+    }
+
+    /// `dropped` for a whole-series Change time, whose rule follows the new start.
+    pub fn dropped_by_timing(&self, timing: &Timing) -> usize {
+        self.dropped(timing, self.retimed(timing).as_ref())
     }
 
     /// The occurrences covering `date` in `zone`, with their original dates. Only start dates
@@ -717,14 +865,30 @@ impl Event {
             };
         };
         let last = recurrence.last(start);
+        // Original dates whose occurrence isn't at its series time: cancelled, or moved.
+        let away = |day: &NaiveDate| match recurrence.exceptions.get(day) {
+            Some(Exception::Cancelled) => true,
+            Some(Exception::Changed(changes)) => changes.timing.is_some(),
+            None => false,
+        };
+        // Moved occurrences can be anywhere, so each is checked on its own. Exceptions are few.
+        let moved = recurrence.exceptions.iter()
+            .filter_map(|(day, exception)| match exception {
+                Exception::Changed(Override { timing: Some(timing), .. }) => Some((*day, *timing)),
+                _ => None,
+            })
+            .filter(|(day, timing)| {
+                recurrence.occurs_on(*day, start, last) && timing.covers(date, zone)
+            });
         let earliest = date.checked_sub_days(Days::new(self.timing.days() + 2));
         let (Some(earliest), Some(latest)) = (earliest, date.checked_add_days(Days::new(2))) else {
-            return vec![];
+            return moved.collect();
         };
         earliest.iter_days().take_while(|day| *day <= latest)
-            .filter(|day| recurrence.occurs_on(*day, start, last))
+            .filter(|day| recurrence.occurs_on(*day, start, last) && !away(day))
             .filter_map(|day| Some((day, self.timing.moved_to(day)?)))
             .filter(|(_, timing)| timing.covers(date, zone))
+            .chain(moved)
             .collect()
     }
 }
@@ -740,7 +904,10 @@ pub struct Occurrence<'a> {
 
 impl<'a> Occurrence<'a> {
     pub fn id(&self) -> EventId { self.id }
+    /// The series. Use `title` and `timing` for this occurrence's own values.
     pub fn event(&self) -> &'a Event { self.event }
+    /// Its own title if it was renamed, else the series'.
+    pub fn title(&self) -> &'a str { self.event.title_on(self.date) }
     /// The date it would normally start on, in the event's own zone. It identifies the
     /// occurrence within its series.
     pub fn date(&self) -> NaiveDate { self.date }
@@ -763,6 +930,9 @@ pub enum CalendarMessage {
     AddAttachment { id: EventId, link: String },
     RemoveAttachment { id: EventId, link: String },
     SetRecurrence { id: EventId, recurrence: Option<Recurrence> },
+    CancelOccurrence { id: EventId, date: NaiveDate },
+    ChangeOccurrence { id: EventId, date: NaiveDate, changes: Override },
+    RestoreOccurrence { id: EventId, date: NaiveDate },
 }
 
 /// The one AIR record per identity. Deleting only marks an event; AIR never erases data.
@@ -827,6 +997,21 @@ impl Calendar {
         calendar.send(CalendarMessage::SetRecurrence { id, recurrence });
     }
 
+    /// Cancels one occurrence for good, identified by its original date `date`.
+    pub fn cancel_occurrence(calendar: &mut Instance<Calendar>, id: EventId, date: NaiveDate) {
+        calendar.send(CalendarMessage::CancelOccurrence { id, date });
+    }
+
+    /// Replaces the occurrence's changes with `changes`.
+    pub fn change_occurrence(calendar: &mut Instance<Calendar>, id: EventId, date: NaiveDate, changes: Override) {
+        calendar.send(CalendarMessage::ChangeOccurrence { id, date, changes });
+    }
+
+    /// Removes the occurrence's changes, so it matches the series again.
+    pub fn restore_occurrence(calendar: &mut Instance<Calendar>, id: EventId, date: NaiveDate) {
+        calendar.send(CalendarMessage::RestoreOccurrence { id, date });
+    }
+
     /// `None` if there's no such event or it was deleted.
     pub fn event(&self, id: EventId) -> Option<&Event> {
         self.events.get(&id).filter(|event| !event.deleted)
@@ -850,6 +1035,16 @@ impl Calendar {
     /// The event an edit message may change: it exists and isn't deleted.
     fn editable(&mut self, id: EventId) -> Option<&mut Event> {
         self.events.get_mut(&id).filter(|event| !event.deleted)
+    }
+
+    /// The exceptions of a repeating event, if its rule picks `date`. Exceptions don't change
+    /// which dates the rule picks, so a cancelled or moved occurrence still qualifies.
+    fn exceptions(&mut self, id: EventId, date: NaiveDate) -> Option<&mut BTreeMap<NaiveDate, Exception>> {
+        let event = self.editable(id)?;
+        let start = event.timing.start_date();
+        let recurrence = event.recurrence.as_mut()?;
+        let picked = recurrence.occurs_on(date, start, recurrence.last(start));
+        picked.then_some(&mut recurrence.exceptions)
     }
 }
 
@@ -893,14 +1088,15 @@ impl Contract for Calendar {
                 if let Some(event) = self.editable(id) && timing.is_valid() {
                     // Keep the repeat rule meaningful if the start date moves. If it no longer
                     // fits (an `until` before the new start), the whole message is ignored.
-                    let (from, to) = (event.timing.start_date(), timing.start_date());
-                    let recurrence = event.recurrence.as_ref()
-                        .map(|recurrence| recurrence.moved(from, to));
+                    let recurrence = event.retimed(&timing);
                     if recurrence.as_ref().is_some_and(|recurrence| !recurrence.is_valid(&timing)) {
                         return;
                     }
+                    // Single changes the new rule no longer picks are dropped.
+                    event.recurrence = recurrence.map(|recurrence| {
+                        recurrence.pruned(timing.start_date())
+                    });
                     event.timing = timing;
-                    event.recurrence = recurrence;
                     event.time_proposals.clear();
                 }
             }
@@ -948,7 +1144,29 @@ impl Contract for Calendar {
                 let exceptions = event.recurrence.as_ref()
                     .map(|current| current.exceptions.clone()).unwrap_or_default();
                 let recurrence = Recurrence { exceptions, ..recurrence }.normalised();
-                if recurrence.is_valid(&event.timing) { event.recurrence = Some(recurrence); }
+                if recurrence.is_valid(&event.timing) {
+                    // Single changes the new rule no longer picks are dropped.
+                    event.recurrence = Some(recurrence.pruned(event.timing.start_date()));
+                }
+            }
+            CalendarMessage::CancelOccurrence { id, date } => {
+                if let Some(exceptions) = self.exceptions(id, date) {
+                    exceptions.insert(date, Exception::Cancelled);
+                }
+            }
+            CalendarMessage::ChangeOccurrence { id, date, changes } => {
+                // Cancelling is permanent, so a cancelled occurrence can't be changed.
+                if let Some(changes) = changes.normalised()
+                    && let Some(exceptions) = self.exceptions(id, date)
+                    && exceptions.get(&date) != Some(&Exception::Cancelled) {
+                    exceptions.insert(date, Exception::Changed(changes));
+                }
+            }
+            CalendarMessage::RestoreOccurrence { id, date } => {
+                if let Some(exceptions) = self.exceptions(id, date)
+                    && matches!(exceptions.get(&date), Some(Exception::Changed(_))) {
+                    exceptions.remove(&date);
+                }
             }
         }
     }
