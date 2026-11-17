@@ -8,6 +8,7 @@ use chrono_tz::Tz;
 use ramp::prism::air::{Contract, Id, Instance, Metadata, Name};
 use serde::{Deserialize, Serialize};
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Chosen by the creating device, so it is known before AIR confirms the event.
@@ -38,10 +39,24 @@ impl Timing {
         iana_time_zone::get_timezone().ok().and_then(|zone| zone.parse().ok()).unwrap_or(Tz::UTC)
     }
 
+    /// The regular form's timing: it ends on `date`, or the next day if `end` is earlier than
+    /// `start`. `None` if `end` equals `start`.
+    pub fn from_times(date: NaiveDate, start: NaiveTime, end: NaiveTime, time_zone: Tz) -> Option<Timing> {
+        let end_date = match end.cmp(&start) {
+            Ordering::Greater => date,
+            Ordering::Less => date.succ_opt()?,
+            Ordering::Equal => return None,
+        };
+        Some(Timing::Timed { start: date.and_time(start), end: end_date.and_time(end), time_zone })
+    }
+
     pub fn is_valid(&self) -> bool {
-        match self {
+        match *self {
             Timing::AllDay { first_day, last_day } => last_day >= first_day,
-            Timing::Timed { .. } => self.instants().is_some_and(|(start, end)| end > start),
+            Timing::Timed { start, end, time_zone } => {
+                Self::instant(start, time_zone).zip(Self::instant(end, time_zone))
+                    .is_some_and(|(start, end)| end > start)
+            }
         }
     }
 
@@ -56,27 +71,32 @@ impl Timing {
         match self {
             Timing::AllDay { first_day, last_day } => (*first_day..=*last_day).contains(&date),
             Timing::Timed { .. } => self.instants().is_some_and(|(start, end)| {
-                let midnight = |date: NaiveDate| Self::instant(date.and_time(NaiveTime::MIN), zone);
+                let midnight = |date: NaiveDate| {
+                    Self::instant(date.and_time(NaiveTime::MIN), zone).unwrap()
+                };
                 start < midnight(date.succ_opt().unwrap()) && end > midnight(date)
             }),
         }
     }
 
+    /// Panics on a time that can't be resolved. `is_valid` rejects those, so `apply` never
+    /// stores one.
     fn instants(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
         match self {
             Timing::AllDay { .. } => None,
-            Timing::Timed { start, end, time_zone } => {
-                Some((Self::instant(*start, *time_zone), Self::instant(*end, *time_zone)))
-            }
+            Timing::Timed { start, end, time_zone } => Some((
+                Self::instant(*start, *time_zone).unwrap(),
+                Self::instant(*end, *time_zone).unwrap(),
+            )),
         }
     }
 
     /// A clock time that doesn't exist (clocks spring forward) moves forward one hour; one that
-    /// happens twice (clocks fall back) uses the first.
-    fn instant(local: NaiveDateTime, zone: Tz) -> DateTime<Utc> {
+    /// happens twice (clocks fall back) uses the first. `None` past the ends of chrono's range.
+    fn instant(local: NaiveDateTime, zone: Tz) -> Option<DateTime<Utc>> {
         match zone.from_local_datetime(&local) {
-            LocalResult::Single(time) | LocalResult::Ambiguous(time, _) => time.to_utc(),
-            LocalResult::None => Self::instant(local + TimeDelta::hours(1), zone),
+            LocalResult::Single(time) | LocalResult::Ambiguous(time, _) => Some(time.to_utc()),
+            LocalResult::None => Self::instant(local.checked_add_signed(TimeDelta::hours(1))?, zone),
         }
     }
 }
@@ -191,22 +211,29 @@ impl Event {
         NaiveTime::parse_from_str(input, "%H:%M").ok()
     }
 
-    /// The new-event form creates timed events in the device's time zone.
+    /// Reads either new-event form; they differ only in their timing steps. Timed events use the
+    /// device's time zone.
     pub fn from_states(states: &[State]) -> Event {
         let [
-            State::Text(title), State::Enumerator(category), State::Number(date),
-            State::Number(start), State::Number(end_date), State::Number(end),
-            State::Text(location), State::Text(info),
+            State::Text(title), State::Enumerator(category), timing @ .., State::Text(location),
+            State::Text(info),
         ] = states else {
             unreachable!()
         };
+        let timing = match timing {
+            [State::Number(first_day), State::Number(last_day)] => Timing::AllDay {
+                first_day: Self::date(first_day).unwrap(),
+                last_day: Self::date(last_day).unwrap(),
+            },
+            [State::Number(date), State::Number(start), State::Number(end)] => Timing::from_times(
+                Self::date(date).unwrap(), Self::time(start).unwrap(), Self::time(end).unwrap(),
+                Timing::device_zone(),
+            ).unwrap(),
+            _ => unreachable!(),
+        };
         Event {
             title: title.trim().to_string(),
-            timing: Timing::Timed {
-                start: Self::date(date).unwrap().and_time(Self::time(start).unwrap()),
-                end: Self::date(end_date).unwrap().and_time(Self::time(end).unwrap()),
-                time_zone: Timing::device_zone(),
-            },
+            timing,
             location: Self::optional(location),
             info: Self::optional(info),
             attendees: vec![],

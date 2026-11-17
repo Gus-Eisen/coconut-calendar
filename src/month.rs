@@ -7,7 +7,7 @@ use chrono::{Datelike, Months, NaiveDate, NaiveDateTime, NaiveTime};
 use chrono_tz::Tz;
 use ramp::prism::air::Instance;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::{Calendar, Category, Event, Timing};
@@ -53,15 +53,11 @@ impl MonthScreen {
                     .collect();
                 drop(state);
                 let new_event = Box::new(move |_ctx: &mut Context, theme: &Theme| {
-                    Flow::from_form(NewEvent::form(theme, calendar.clone()))
+                    Flow::from_form(NewEvent::picker(theme, calendar.clone()))
                 });
                 PageType::root(
-                    "Calendar",
-                    vec![],
-                    months,
-                    None,
-                    Some(("Create Event".into(), new_event)),
-                    None,
+                    "Calendar", vec![], months, None,
+                    Some(("Create Event".into(), new_event)), None,
                 )
             },
         ))
@@ -122,30 +118,33 @@ impl DayScreen {
 
 pub struct NewEvent;
 impl NewEvent {
-    pub fn form(theme: &Theme, mut calendar: Instance<Calendar>) -> Form {
+    /// Asks which kind of event to create, then resets navigation and opens that kind's form.
+    pub fn picker(theme: &Theme, calendar: Instance<Calendar>) -> Form {
         let submit = Box::new(move |_ctx: &mut Context, states: &Vec<State>| {
-            Calendar::create_event(&mut calendar, Event::from_states(states));
-            FormComplete::None
+            let [State::Enumerator(index)] = states.as_slice() else { unreachable!() };
+            let (kind, calendar) = (EventKind::options()[*index], calendar.clone());
+            FormComplete::Return(Box::new(move |ctx: &mut Context, theme: &Theme| {
+                let form = match kind {
+                    EventKind::Regular => Self::form(theme, calendar.clone()),
+                    EventKind::AllDay => Self::all_day_form(theme, calendar.clone()),
+                };
+                Flow::from_form(form).build(ctx, theme)(ctx, theme)
+            }))
         }) as Box<dyn FormSubmit>;
 
+        let kinds = EventKind::options().map(|kind| (kind.label(), kind.description())).to_vec();
+        Form::flow(theme, vec![FormItem::enumerator("Event Type", kinds)], None, None, submit)
+    }
+
+    pub fn form(theme: &Theme, calendar: Instance<Calendar>) -> Form {
         let review = |states: &Vec<State>| {
             let event = Event::from_states(states);
             let Timing::Timed { start, end, time_zone } = *event.timing() else { unreachable!() };
-            let rows = [
-                Some(("Title", event.title().to_string())),
-                Some(("Category", event.category().label().to_string())),
-                Some(("Start", start.format("%-d %b %Y, %H:%M").to_string())),
-                Some(("End", end.format("%-d %b %Y, %H:%M").to_string())),
-                Some(("Time zone", time_zone.name().to_string())),
-                event.location().map(|location| ("Location", location.to_string())),
-                event.info().map(|info| ("Info", info.to_string())),
-            ];
-            vec![Display::table(
-                "New event",
-                rows.into_iter().flatten()
-                    .map(|(label, value)| TableItem::new(label, &value)).collect(),
-                None,
-            )]
+            Self::review(&event, vec![
+                ("Start", start.format("%-d %b %Y, %H:%M").to_string()),
+                ("End", end.format("%-d %b %Y, %H:%M").to_string()),
+                ("Time zone", time_zone.name().to_string()),
+            ])
         };
 
         let success = |states: Vec<State>| {
@@ -162,26 +161,9 @@ impl NewEvent {
         };
 
         let times = Rc::new(RefCell::new(FormTimes::default()));
-        let (date_times, start_times, end_date_times, end_times) =
-            (times.clone(), times.clone(), times.clone(), times);
+        let (date_times, start_times, end_times) = (times.clone(), times.clone(), times);
 
-        let items = vec![
-            FormItem::text(
-                "Event Title",
-                "Event title",
-                None,
-                |_ctx: &mut Context, title: String| {
-                    if title.trim().is_empty() {
-                        FormValidState::Invalid
-                    } else {
-                        FormValidState::Valid
-                    }
-                },
-            ),
-            FormItem::enumerator(
-                "Category",
-                Category::options().map(|category| (category.label(), "")).to_vec(),
-            ),
+        let timing = vec![
             FormItem::number(
                 "Date",
                 NumberVariant::Date,
@@ -213,47 +195,141 @@ impl NewEvent {
                 },
             ),
             FormItem::number(
-                "End Date",
-                NumberVariant::Date,
-                move |_ctx: &mut Context, date: String| {
-                    let parsed = Event::date(&date);
-                    let mut times = end_date_times.borrow_mut();
-                    times.end_date = parsed;
-                    match (parsed, times.date) {
-                        _ if date.is_empty() => FormValidState::Invalid,
-                        (None, _) => FormValidState::InvalidWithData("Not a valid date.".into()),
-                        (Some(end), Some(start)) if end < start => FormValidState::InvalidWithData(
-                            "Must be on or after the start date.".into(),
-                        ),
-                        _ => FormValidState::Valid,
-                    }
-                },
-            ),
-            FormItem::number(
                 "End Time",
                 NumberVariant::Time,
                 move |_ctx: &mut Context, time: String| {
                     let times = end_times.borrow();
-                    let end = Event::time(&time);
-                    let timing = match (times.date, times.start, times.end_date, end) {
+                    let timing = match (times.date, times.start, Event::time(&time)) {
                         _ if time.is_empty() => return FormValidState::Invalid,
-                        (_, _, _, None) => {
+                        (_, _, None) => {
                             return FormValidState::InvalidWithData("Not a valid time.".into());
                         }
-                        (Some(date), Some(start), Some(end_date), Some(end)) => Timing::Timed {
-                            start: date.and_time(start),
-                            end: end_date.and_time(end),
-                            time_zone: Timing::device_zone(),
-                        },
+                        (Some(date), Some(start), Some(end)) => {
+                            Timing::from_times(date, start, end, Timing::device_zone())
+                        }
+                        _ => return FormValidState::Valid,
+                    };
+                    match timing {
+                        None => FormValidState::InvalidWithData(
+                            "Must be different from the start.".into(),
+                        ),
+                        Some(timing) if timing.is_valid() => FormValidState::Valid,
+                        Some(_) => {
+                            FormValidState::InvalidWithData("Must be after the start.".into())
+                        }
+                    }
+                },
+            ),
+        ];
+
+        Self::flow(
+            theme,
+            calendar,
+            timing,
+            Review::new("New Event Review", review),
+            Success::new("New Event", success),
+        )
+    }
+
+    pub fn all_day_form(theme: &Theme, calendar: Instance<Calendar>) -> Form {
+        let review = |states: &Vec<State>| {
+            let event = Event::from_states(states);
+            let Timing::AllDay { first_day, last_day } = *event.timing() else { unreachable!() };
+            Self::review(&event, vec![
+                ("First day", first_day.format("%-d %b %Y").to_string()),
+                ("Last day", last_day.format("%-d %b %Y").to_string()),
+            ])
+        };
+
+        let success = |states: Vec<State>| {
+            let event = Event::from_states(&states);
+            let Timing::AllDay { first_day, last_day } = *event.timing() else { unreachable!() };
+            let days = if first_day == last_day {
+                first_day.format("%-d %b %Y").to_string()
+            } else {
+                format!("{} to {}", first_day.format("%-d %b %Y"), last_day.format("%-d %b %Y"))
+            };
+            (Icons::Checkmark, format!("All-day event saved for {days}"))
+        };
+
+        let first_day = Rc::new(Cell::new(None));
+        let first_day_step = first_day.clone();
+
+        let timing = vec![
+            FormItem::number(
+                "First Day",
+                NumberVariant::Date,
+                move |_ctx: &mut Context, date: String| {
+                    let parsed = Event::date(&date);
+                    first_day_step.set(parsed);
+                    if date.is_empty() {
+                        FormValidState::Invalid
+                    } else if parsed.is_some() {
+                        FormValidState::Valid
+                    } else {
+                        FormValidState::InvalidWithData("Not a valid date.".into())
+                    }
+                },
+            ),
+            FormItem::number(
+                "Last Day",
+                NumberVariant::Date,
+                move |_ctx: &mut Context, date: String| {
+                    let timing = match (first_day.get(), Event::date(&date)) {
+                        _ if date.is_empty() => return FormValidState::Invalid,
+                        (_, None) => {
+                            return FormValidState::InvalidWithData("Not a valid date.".into());
+                        }
+                        (Some(first_day), Some(last_day)) => Timing::AllDay { first_day, last_day },
                         _ => return FormValidState::Valid,
                     };
                     if timing.is_valid() {
                         FormValidState::Valid
                     } else {
-                        FormValidState::InvalidWithData("Must be after the start.".into())
+                        FormValidState::InvalidWithData("Must be on or after the first day.".into())
                     }
                 },
             ),
+        ];
+
+        Self::flow(
+            theme,
+            calendar,
+            timing,
+            Review::new("New All-Day Event Review", review),
+            Success::new("New All-Day Event", success),
+        )
+    }
+
+    /// Puts the steps both forms share around `timing`, so `Event::from_states` can read either.
+    fn flow(
+        theme: &Theme, mut calendar: Instance<Calendar>, timing: Vec<FormItem>, review: Review,
+        success: Success,
+    ) -> Form {
+        let submit = Box::new(move |_ctx: &mut Context, states: &Vec<State>| {
+            Calendar::create_event(&mut calendar, Event::from_states(states));
+            FormComplete::None
+        }) as Box<dyn FormSubmit>;
+
+        let start = vec![
+            FormItem::text(
+                "Event Title",
+                "Event title",
+                None,
+                |_ctx: &mut Context, title: String| {
+                    if title.trim().is_empty() {
+                        FormValidState::Invalid
+                    } else {
+                        FormValidState::Valid
+                    }
+                },
+            ),
+            FormItem::enumerator(
+                "Category",
+                Category::options().map(|category| (category.label(), "")).to_vec(),
+            ),
+        ];
+        let end = vec![
             FormItem::text(
                 "Location",
                 "Location (optional)",
@@ -268,21 +344,60 @@ impl NewEvent {
             ),
         ];
 
-        Form::flow(
-            theme,
-            items,
-            Some(Review::new("New Event Review", review)),
-            Some(Success::new("New Event", success)),
-            submit,
-        )
+        let items = [start, timing, end].into_iter().flatten().collect();
+        Form::flow(theme, items, Some(review), Some(success), submit)
+    }
+
+    fn review(event: &Event, timing: Vec<(&str, String)>) -> Vec<Display> {
+        let rows = [
+            vec![
+                ("Title", event.title().to_string()),
+                ("Category", event.category().label().to_string()),
+            ],
+            timing,
+            [
+                event.location().map(|location| ("Location", location.to_string())),
+                event.info().map(|info| ("Info", info.to_string())),
+            ].into_iter().flatten().collect(),
+        ];
+        vec![Display::table(
+            "New event",
+            rows.into_iter().flatten()
+                .map(|(label, value)| TableItem::new(label, &value)).collect(),
+            None,
+        )]
     }
 }
 
-/// The form's answers so far. chk only shows each validator its own step, so the end steps
-/// read the start from here.
+/// The choices on the event-type picker. UI-only: never stored.
+#[derive(Clone, Copy)]
+enum EventKind {
+    Regular,
+    AllDay,
+}
+
+impl EventKind {
+    fn options() -> [EventKind; 2] { [EventKind::Regular, EventKind::AllDay] }
+
+    fn label(self) -> &'static str {
+        match self {
+            EventKind::Regular => "Regular",
+            EventKind::AllDay => "All-Day",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            EventKind::Regular => "Starts and ends at set times",
+            EventKind::AllDay => "Lasts one or more whole days",
+        }
+    }
+}
+
+/// The form's answers so far. chk only shows each validator its own step, so End Time reads
+/// the start from here.
 #[derive(Default)]
 struct FormTimes {
     date: Option<NaiveDate>,
     start: Option<NaiveTime>,
-    end_date: Option<NaiveDate>,
 }
