@@ -39,3 +39,7 @@ them into the next design version instead.
   Repeating form drops End Date too. (2026-11-16)
 - **01 Month (home):** the spec's month row shows the start time only, as on 19
   ("09:30 Standup · Work"), not 01's start and end. (2026-11-16)
+- **01 Month and 04 All-day form:** the month list runs 13 months, not 12, and a `DD-MM`
+  date means the first such date on or after today, not "from the 1st of this month".
+  Last Day (and Change time's End Date on 09) is the first such date on or after the start,
+  at most 28 days later ("Must be on or after the start."). (2026-11-17)

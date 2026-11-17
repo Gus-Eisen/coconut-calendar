@@ -331,11 +331,12 @@ Helpers for the new-event forms:
 
 | Method | Signature | What it does |
 | -------- | ----------- | -------------- |
-| `window_start` | `fn window_start() -> NaiveDate` | The first day of the current month. New events can't be earlier than this. |
-| `date` | `fn date(input: &str) -> Option<NaiveDate>` | Reads a `DD-MM` date. Picks the year so the date falls on or after `window_start()`; an earlier date is moved to next year. `None` if the input isn't a valid date. |
+| `window_start` | `fn window_start() -> NaiveDate` | The first day of the current month, where the month list starts. |
+| `date` | `fn date(input: &str) -> Option<NaiveDate>` | Reads a `DD-MM` date as the first such date on or after today: `date_from(input, today)`. Used for every first date (Date, First Day). `None` if the input isn't a valid date. |
+| `date_from` | `fn date_from(input: &str, earliest: NaiveDate) -> Option<NaiveDate>` | Reads a `DD-MM` date as the first such date on or after `earliest`: it tries `earliest`'s year, then the next year. `None` if neither gives a valid date on or after `earliest` (e.g. `29-02` when the next 29 February is more than a year away). |
 | `time` | `fn time(input: &str) -> Option<NaiveTime>` | Reads an `HH:MM` time (24-hour). `None` if invalid. |
-| `from_states` | `fn from_states(states: &[State]) -> Event` | Builds an `Event` from either new-event form's inputs: `Timing::AllDay` from the all-day form, or `Timing::Timed` in the device's time zone from the timed form. Sets `deleted: false`. The form checks the inputs first, so this panics if they're invalid. It only ever reads form inputs, never AIR data. |
-| `optional` (private) | `fn optional(input: &str) -> Option<String>` | Trims a form input. Returns `None` if it's empty. |
+| `from_states` | `fn from_states(states: &[State]) -> Event` | Builds an `Event` from either new-event form's inputs, reading the timing steps with `Timing::from_states` in the device's time zone. Sets `deleted: false`. The form checks the inputs first, so this panics if they're invalid. It only ever reads form inputs, never AIR data. |
+| `optional` | `fn optional(input: &str) -> Option<String>` | Trims a text. Returns `None` if it's empty. The forms and `apply` both use it, so they share one rule. |
 
 ### Methods on `Timing`
 
@@ -344,6 +345,7 @@ Helpers for the new-event forms:
 | `device_zone` | `fn device_zone() -> Tz` | The device's time zone, or UTC if the device reports one that `chrono-tz` doesn't recognise. |
 | `is_valid` | `fn is_valid(&self) -> bool` | `AllDay`: `last_day` is on or after `first_day`. `Timed`: both times can be worked out in `time_zone`, and `end` is after `start`. `apply` and both forms use this one rule. |
 | `from_times` | `fn from_times(date: NaiveDate, start: NaiveTime, end: NaiveTime, time_zone: Tz) -> Option<Timing>` | The regular form's timing: ends on `date`, or the next day if `end` is earlier than `start`. `None` if they're equal. Callers still check `is_valid`. |
+| `from_states` | `fn from_states(states: &[State], time_zone: Tz) -> Timing` | Reads a form's timing steps: First Day and Last Day (`AllDay`, Last Day by `Event::date_from` the first day); Date, Start Time and End Time (the overnight rule of `from_times`); or Date, Start Time, End Date and End Time (Change time, End Date by `Event::date_from` the date). The form checks the inputs first, so this panics if they're invalid. |
 | `in_zone` | `fn in_zone(&self, zone: Tz) -> Option<(NaiveDateTime, NaiveDateTime)>` | The start and end as clock times in `zone`. `None` for an all-day event. |
 | `covers` | `fn covers(&self, date: NaiveDate, zone: Tz) -> bool` | Whether any part of the event falls on `date` in `zone` (days are half-open). All-day events ignore `zone`. |
 
@@ -386,8 +388,16 @@ its own form, one field per page (UI: see 03 and 04):
   Change time (UI: see 09), which keeps its End Date step; events with set
   hours on several days are a daily repeating event (step 3a); and whole days
   are an All-day event.
-- Last Day must be on or after First Day. End Time and Last Day are checked
-  with `Timing::is_valid`.
+- Date and First Day are the first such date on or after today (`Event::date`),
+  so new events run from today to about a year ahead.
+- Last Day (and Change time's End Date) is the first such date on or after
+  the start date (`Event::date_from`). If that's more than 28 days after the
+  start, the error is "Must be on or after the start.": a date typed before the
+  start comes out about a year later, so it hits this error. For example, First
+  Day `30-12` and Last Day `02-01` is 2 Jan of the next year; First Day `17-11`
+  and Last Day `16-11` is an error. The 28-day limit is a form rule only: it
+  isn't in `Timing::is_valid` or `apply`, so longer events from elsewhere are
+  still accepted. End Time is checked with `Timing::is_valid`.
 - A chk validator only sees its own step. So the later steps read the earlier
   answers from state the form's validators share. An invalid answer shows an
   inline error and turns Continue off (UI: see 03).
@@ -426,6 +436,7 @@ That's fine before release, because nobody uses Coconut yet.
 | Method | Signature | What it does |
 |--------|-----------|--------------|
 | `open` | `fn open(ctx: &mut Context) -> Instance<Calendar>` | Opens the user's own calendar, creating it the first time. It finds the calendar by its own location (`hash(init, signer)`), never by taking the first one in the user's list: once calendars are shared, other people's calendars show up in the same list. |
+| `event` | `fn event(&self, id: EventId) -> Option<&Event>` | The event with `id`, for its detail page. `None` if there's none, or it's deleted. |
 | `on` | `fn on(&self, date: NaiveDate, zone: Tz) -> Vec<Occurrence<'_>>` | Everything happening on `date` in the viewer's time zone `zone`, sorted with all-day events first, then by start time. Includes multi-day events that cover `date`, and each occurrence of repeating events. Leaves out deleted events and cancelled occurrences. |
 
 `Occurrence` is one appearance of an event on a day: the event's `EventId`, a
@@ -497,7 +508,7 @@ editing is split:
 | Screen | What it changes | How |
 |--------|-----------------|-----|
 | Edit details (UI: see 08) | Title, Location, Info, Video link | One page (`Form::page` / `PageType::edit_and_display`) with a `FormItem::text_with_preset` for each field, filled with the current values. Save stays off until something changes and every field is valid. Calls the setter for each changed field. |
-| Change time (UI: see 09) | `timing` | A flow: Date, Start Time, End Date, End Time, then a review showing the current and new times. Calls `set_timing`. |
+| Change time (UI: see 09) | `timing` | A flow: Date, Start Time, End Date, End Time, then a review showing the current and new times. Date is on or after today; End Date uses the same rule as Last Day (on or after the start, at most 28 days later). Times are typed and shown in the event's own time zone (the `time_zone` in its `Timing`), and the review names it. An all-day event changed to timed uses the device's zone. Calls `set_timing`, unless the timing is unchanged. |
 | Change to all-day or timed (UI: see 10) | `timing` | A picker like the event-type picker (Timed / All-day, with the current timing in the first option's subtitle), then the matching timing flow. |
 | Change category or privacy (UI: see 11) | `category`, `private` | A one-step radio page: Personal / Work, or Not private / Private. The radio always starts on its first option, so the current value is shown as that option's subtitle. Calls `set_category` or `set_private`. |
 | Add attachment link (UI: see 12) | `attachments` | A text step with a Paste action. Calls `add_attachment`. Each link on the detail page has a Delete action (`remove_attachment`). No file upload. |
@@ -769,7 +780,7 @@ ownership and permissions model.
 
 | View | Shows |
 |------|-------|
-| Month | chk has no grid component, so it's a list, not a grid: one section per month, for 12 months from `Event::window_start()`, and one row per day with the day number, the weekday and a summary on the right. A day with one event shows its time (or "All day"), title and category label, e.g. "09:30 Standup · Work". Today is marked with a dot and "Today" in the subtitle. A multi-day event appears on every day it covers. Tapping a day with events opens the day view. The root's one header icon is free (UI: see 01, 19). |
+| Month | chk has no grid component, so it's a list, not a grid: one section per month, for 13 months from `Event::window_start()` (so a date nearly a year ahead is on screen), and one row per day with the day number, the weekday and a summary on the right. A day with one event shows its time (or "All day"), title and category label, e.g. "09:30 Standup · Work". Today is marked with a dot and "Today" in the subtitle. A multi-day event appears on every day it covers. Tapping a day with events opens the day view. The root's one header icon is free (UI: see 01, 19). |
 | Day | Every occurrence on one day, from `Calendar::on`: all-day events first, then the rest by start time. It's a list, not an hour grid. Each row shows the title, the category label (with the location, or that it repeats), and the time in the viewer's time zone (with the date too if it starts or ends on another day). Tapping a row opens the event detail page, which has edit and delete. Editing or deleting an occurrence of a repeating event asks: this event, this and following events, or all events (UI: see 16). A display page can't swipe, so going to another day means going back to the month (UI: see 18). |
 
 **Month summary for a day with several events (planned, likely step 4).** The
@@ -823,22 +834,23 @@ doesn't decide yet. The open questions in sections 2 and 4 still stand.
 - **Ending a regular event.** Decided 2026-11-16: no End Date step; the
   end date comes from the overnight rule (see the new-event forms). Still
   open: a default length instead of typing End Time? (UI: see 03)
-- **Time zone in the forms.** The timed form and Change time always use the
-  device's time zone (UI: see 05, 09). Is there a time-zone step in 1.0, and if
-  so, a typed zone name or a short list? Changing the time of an event set in
-  another zone would otherwise move it to the device's zone.
-- **Date window.** `DD-MM` has no year, so events can only be created from the
-  first of this month to about a year ahead (UI: see 04). Is that acceptable
-  for 1.0?
+- **Time zone in the forms.** Change time: decided 2026-11-17, it uses the
+  event's own time zone and names it on the review (an all-day event becoming
+  timed takes the device's zone). Still open: the new-event forms use the
+  device's time zone (UI: see 05). Is there a time-zone step in 1.0, and if so,
+  a typed zone name or a short list?
+- **Date window.** Decided 2026-11-17: `DD-MM` has no year, so events can be
+  created from today to about a year ahead (`Event::date`). A past day can't be
+  picked (UI: see 04).
 - **Quick create, search, schedule view.** Are any of these wanted early? The
   month root's one header icon is free and could open Search or "Go to date"
   (UI: see 19).
 
 **Editing**
 
-- **Saving several fields at once.** The Edit details page can change several
-  fields with one Save (UI: see 08), but each setter is its own message. Is
-  that several messages, or one message carrying all the changes?
+- **Saving several fields at once.** Decided 2026-11-17: one Save on Edit
+  details (UI: see 08) sends one message per changed field, comparing after
+  trimming, so an unchanged field sends nothing.
 - **Changing privacy.** Decided: 07 gets a Change privacy action that opens screen 11's privacy radio. The Figma mockup of 07 still needs the button added.
 
 **Repeating events and exceptions**

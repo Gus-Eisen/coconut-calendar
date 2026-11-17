@@ -50,6 +50,35 @@ impl Timing {
         Some(Timing::Timed { start: date.and_time(start), end: end_date.and_time(end), time_zone })
     }
 
+    /// Reads a form's timing steps: First Day and Last Day, Date, Start Time and End Time (the
+    /// overnight rule), or Change time's Date, Start Time, End Date and End Time. The validators
+    /// have checked every input, so the unwraps can't fail.
+    pub fn from_states(states: &[State], time_zone: Tz) -> Timing {
+        let date = |input: &str| Event::date(input).unwrap();
+        let time = |input: &str| Event::time(input).unwrap();
+        match states {
+            [State::Number(first_day), State::Number(last_day)] => {
+                let first_day = date(first_day);
+                let last_day = Event::date_from(last_day, first_day).unwrap();
+                Timing::AllDay { first_day, last_day }
+            }
+            [State::Number(day), State::Number(start), State::Number(end)] => {
+                Timing::from_times(date(day), time(start), time(end), time_zone).unwrap()
+            }
+            [
+                State::Number(day), State::Number(start), State::Number(end_day),
+                State::Number(end),
+            ] => {
+                let day = date(day);
+                let end_day = Event::date_from(end_day, day).unwrap();
+                Timing::Timed {
+                    start: day.and_time(time(start)), end: end_day.and_time(time(end)), time_zone,
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
     pub fn is_valid(&self) -> bool {
         match *self {
             Timing::AllDay { first_day, last_day } => last_day >= first_day,
@@ -197,14 +226,16 @@ impl Event {
     }
 
     pub fn date(input: &str) -> Option<NaiveDate> {
-        let first = Self::window_start();
-        let year = first.year();
-        let parsed = NaiveDate::parse_from_str(&format!("{input}-{year}"), "%d-%m-%Y").ok()?;
-        if parsed < first {
-            parsed.with_year(year + 1)
-        } else {
-            Some(parsed)
-        }
+        Self::date_from(input, Local::now().date_naive())
+    }
+
+    /// The first `DD-MM` date on or after `earliest`: `earliest`'s year, else the next year.
+    pub fn date_from(input: &str, earliest: NaiveDate) -> Option<NaiveDate> {
+        [earliest.year(), earliest.year() + 1].into_iter()
+            .filter_map(|year| {
+                NaiveDate::parse_from_str(&format!("{input}-{year}"), "%d-%m-%Y").ok()
+            })
+            .find(|date| *date >= earliest)
     }
 
     pub fn time(input: &str) -> Option<NaiveTime> {
@@ -220,20 +251,9 @@ impl Event {
         ] = states else {
             unreachable!()
         };
-        let timing = match timing {
-            [State::Number(first_day), State::Number(last_day)] => Timing::AllDay {
-                first_day: Self::date(first_day).unwrap(),
-                last_day: Self::date(last_day).unwrap(),
-            },
-            [State::Number(date), State::Number(start), State::Number(end)] => Timing::from_times(
-                Self::date(date).unwrap(), Self::time(start).unwrap(), Self::time(end).unwrap(),
-                Timing::device_zone(),
-            ).unwrap(),
-            _ => unreachable!(),
-        };
         Event {
             title: title.trim().to_string(),
-            timing,
+            timing: Timing::from_states(timing, Timing::device_zone()),
             location: Self::optional(location),
             info: Self::optional(info),
             attendees: vec![],
@@ -259,7 +279,7 @@ impl Event {
     pub fn time_proposals(&self) -> &[TimeProposal] { &self.time_proposals }
     pub fn private(&self) -> bool { self.private }
 
-    fn optional(input: &str) -> Option<String> {
+    pub fn optional(input: &str) -> Option<String> {
         let input = input.trim();
         (!input.is_empty()).then(|| input.to_string())
     }
@@ -282,6 +302,15 @@ impl<'a> Occurrence<'a> {
 pub enum CalendarMessage {
     CreateEvent { id: EventId, event: Box<Event> },
     DeleteEvent { id: EventId },
+    SetTitle { id: EventId, title: String },
+    SetTiming { id: EventId, timing: Timing },
+    SetLocation { id: EventId, location: Option<String> },
+    SetInfo { id: EventId, info: Option<String> },
+    SetVideoLink { id: EventId, link: Option<String> },
+    SetCategory { id: EventId, category: Category },
+    SetPrivate { id: EventId, private: bool },
+    AddAttachment { id: EventId, link: String },
+    RemoveAttachment { id: EventId, link: String },
 }
 
 /// The one AIR record per identity. Deleting only marks an event; AIR never erases data.
@@ -305,6 +334,47 @@ impl Calendar {
         calendar.send(CalendarMessage::DeleteEvent { id });
     }
 
+    pub fn set_title(calendar: &mut Instance<Calendar>, id: EventId, title: String) {
+        calendar.send(CalendarMessage::SetTitle { id, title });
+    }
+
+    pub fn set_timing(calendar: &mut Instance<Calendar>, id: EventId, timing: Timing) {
+        calendar.send(CalendarMessage::SetTiming { id, timing });
+    }
+
+    pub fn set_location(calendar: &mut Instance<Calendar>, id: EventId, location: Option<String>) {
+        calendar.send(CalendarMessage::SetLocation { id, location });
+    }
+
+    pub fn set_info(calendar: &mut Instance<Calendar>, id: EventId, info: Option<String>) {
+        calendar.send(CalendarMessage::SetInfo { id, info });
+    }
+
+    pub fn set_video_link(calendar: &mut Instance<Calendar>, id: EventId, link: Option<String>) {
+        calendar.send(CalendarMessage::SetVideoLink { id, link });
+    }
+
+    pub fn set_category(calendar: &mut Instance<Calendar>, id: EventId, category: Category) {
+        calendar.send(CalendarMessage::SetCategory { id, category });
+    }
+
+    pub fn set_private(calendar: &mut Instance<Calendar>, id: EventId, private: bool) {
+        calendar.send(CalendarMessage::SetPrivate { id, private });
+    }
+
+    pub fn add_attachment(calendar: &mut Instance<Calendar>, id: EventId, link: String) {
+        calendar.send(CalendarMessage::AddAttachment { id, link });
+    }
+
+    pub fn remove_attachment(calendar: &mut Instance<Calendar>, id: EventId, link: String) {
+        calendar.send(CalendarMessage::RemoveAttachment { id, link });
+    }
+
+    /// `None` if there's no such event or it was deleted.
+    pub fn event(&self, id: EventId) -> Option<&Event> {
+        self.events.get(&id).filter(|event| !event.deleted)
+    }
+
     /// Events on `date` in the viewer's time zone `zone`: all-day events first, then by start.
     pub fn on(&self, date: NaiveDate, zone: Tz) -> Vec<Occurrence<'_>> {
         let mut occurrences = self.events.iter()
@@ -315,6 +385,11 @@ impl Calendar {
             occurrence.event.timing.instants().map(|(start, _)| start)
         });
         occurrences
+    }
+
+    /// The event an edit message may change: it exists and isn't deleted.
+    fn editable(&mut self, id: EventId) -> Option<&mut Event> {
+        self.events.get_mut(&id).filter(|event| !event.deleted)
     }
 }
 
@@ -342,6 +417,51 @@ impl Contract for Calendar {
             }
             CalendarMessage::DeleteEvent { id } => {
                 if let Some(event) = self.events.get_mut(&id) { event.deleted = true; }
+            }
+            CalendarMessage::SetTitle { id, title } => {
+                if let Some(event) = self.editable(id)
+                    && let Some(title) = Event::optional(&title) {
+                    event.title = title;
+                }
+            }
+            CalendarMessage::SetTiming { id, timing } => {
+                if let Some(event) = self.editable(id) && timing.is_valid() {
+                    event.timing = timing;
+                    event.time_proposals.clear();
+                }
+            }
+            CalendarMessage::SetLocation { id, location } => {
+                if let Some(event) = self.editable(id) {
+                    event.location = location.as_deref().and_then(Event::optional);
+                }
+            }
+            CalendarMessage::SetInfo { id, info } => {
+                if let Some(event) = self.editable(id) {
+                    event.info = info.as_deref().and_then(Event::optional);
+                }
+            }
+            CalendarMessage::SetVideoLink { id, link } => {
+                if let Some(event) = self.editable(id) {
+                    event.video_link = link.as_deref().and_then(Event::optional);
+                }
+            }
+            CalendarMessage::SetCategory { id, category } => {
+                if let Some(event) = self.editable(id) { event.category = category; }
+            }
+            CalendarMessage::SetPrivate { id, private } => {
+                if let Some(event) = self.editable(id) { event.private = private; }
+            }
+            CalendarMessage::AddAttachment { id, link } => {
+                if let Some(event) = self.editable(id)
+                    && let Some(link) = Event::optional(&link)
+                    && !event.attachments.contains(&link) {
+                    event.attachments.push(link);
+                }
+            }
+            CalendarMessage::RemoveAttachment { id, link } => {
+                if let Some(event) = self.editable(id) {
+                    event.attachments.retain(|attachment| *attachment != link);
+                }
             }
         }
     }
