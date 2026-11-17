@@ -41,7 +41,7 @@ Screen numbers such as "see 21b" refer to `design/v1/screens/21b-*.png`.
 | `attendees`        | `Vec<Attendee>`  | The users invited to the event, each with their response. Empty if there are none. | `vec![Attendee { name: alice, response: Response::Accepted }]` |
 | `video_link`       | `Option<String>` | A link to the event's video call, trimmed. `None` if left blank. | `Some("https://meet.example.com/abc-123")` |
 | `attachments`      | `Vec<String>`    | Links to files attached to the event. Empty if there are none. | `vec!["https://files.example.com/slides.pdf"]` |
-| `recurrence`       | `Option<Recurrence>` | How the event repeats, until when, and which occurrences were cancelled or changed. `None` if it happens once. | `Some(Recurrence { frequency: Frequency::Weekly { days: vec![Weekday::Mon] }, until: Some(2027-06-30), exceptions: {} })` |
+| `recurrence`       | `Option<Recurrence>` | How the event repeats, until when, and which occurrences were cancelled or changed. `None` if it happens once. | `Some(Recurrence { frequency: Frequency::Weekly { days: vec![Weekday::Mon] }, interval: 1, until: Some(2027-06-30), count: None, exceptions: {} })` |
 | `category`         | `Category`       | Whether it's a work or personal event. Shown as a text label (see `Category`). | `Category::Work` |
 | `time_proposals`   | `Vec<TimeProposal>` | New times that users have proposed and that are still waiting for everyone to agree. Empty if there are none. | `vec![TimeProposal { proposer: charlie, timing: Timing::Timed { .. }, approvals: {bob} }]` |
 | `private`          | `bool`           | `true` if only users with `Visibility::Private` can see the event (see section 3). Starts `false`. | `false` |
@@ -161,13 +161,16 @@ declining).
 #### `Recurrence`
 
 `Recurrence` is how an event repeats, when it stops, and which occurrences were
-cancelled or changed. A repeating event either never ends (`until: None`) or
-ends on a set date. `Weekday` is `chrono::Weekday`.
+cancelled or changed. A repeating event never ends, ends on a set date
+(`until`), or ends after a number of times (`count`). `Weekday` is
+`chrono::Weekday`.
 
 ```rust
 pub struct Recurrence {
     frequency: Frequency,
-    until: Option<NaiveDate>,     // last date it can happen on; None means it never ends
+    interval: u16,                // every N days, weeks, months or years; 1 to 99
+    until: Option<NaiveDate>,     // last date it can start on; None means no end date
+    count: Option<u16>,           // how many times in total, 1 to 999; never set with `until`
     exceptions: BTreeMap<NaiveDate, Exception>,  // keyed by the date the occurrence would normally start on
 }
 
@@ -176,11 +179,40 @@ pub enum Frequency {
     Weekly { days: Vec<Weekday> },
     Monthly { day_of_month: u8 },
     Yearly,
+    MonthlyWeekday { week: WeekOfMonth, weekday: Weekday },  // appended in step 3a
 }
+
+pub enum WeekOfMonth { First, Second, Third, Fourth, Last }
 ```
+
+Postcard stores enum variants by position, so new variants are only appended.
+Adding `interval`, `count` and `MonthlyWeekday` in step 3a kept the contract id
+`CoconutCalendarV2`: before 3a, `CreateEvent` always stored `recurrence: None`,
+which is one byte with no `Recurrence` inside, so no stored data had the old
+layout (checked by encoding with the old types and decoding with the new).
 
 A repeating event is stored once; the app works out each occurrence from
 `timing` and `recurrence` when it shows the calendar.
+
+**Which dates it picks.** The *start date* is `first_day` (all-day) or the
+date of `start` in the event's own zone (timed). The rule picks dates on or
+after the start date, and on or before `until`:
+
+- `Daily`: every day. `Weekly`: the date's weekday is in `days`. `Monthly`:
+  the date's day is `day_of_month`. `Yearly`: the same month and day as the
+  start date. `MonthlyWeekday`: the given weekday in the given week of the
+  month.
+- The week of the month comes from the day: 1–7 is `First`, 8–14 `Second`,
+  15–21 `Third`, 22–28 `Fourth` and 29–31 `Last`. So a start on Mon 30 Nov
+  means "last Monday", and one on Mon 23 Nov means "4th Monday" (choosing 4th
+  or last is a later option).
+- With `interval` N, only every Nth period counts, from the start: days since
+  the start date, weeks since the start date's week (weeks start on Monday),
+  months since the start month, years since the start year.
+- With `count` N, only the first N picked dates count.
+- The first occurrence is the first picked date on or after the start date.
+  It can be later than the start date (for example weekdays from a Saturday),
+  and the stored `timing` keeps the typed date.
 
 Dates a month or year doesn't have are skipped:
 
@@ -189,30 +221,74 @@ Dates a month or year doesn't have are skipped:
   February.
 - A yearly event on 29 February happens only in leap years.
 
-**Creating a repeating event (step 3a).** The event-type picker gets a third
-option, **Repeating** (UI: see 13). Regular stays first, so it stays the
-default. Repeating opens its own linear form:
+Each occurrence has the same clock times as the first (timed) or the same
+number of days (all-day), moved to its date. Times are resolved in the event's
+zone with `Timing`'s usual rules, so a 09:00 event stays at 09:00 across
+daylight saving. An occurrence whose times can't be worked out is skipped.
+
+**Creating a repeating event (step 3a, decided 2026-11-17).** The event-type
+picker has four options: Regular (first, so it's the default), All-Day,
+**Repeating** ("Happens again at set times") and **Repeating All-Day** ("Whole
+days that repeat, like a birthday") (UI: see 13). Each opens its own linear
+form:
 
 | Form | Steps |
 |------|-------|
-| Repeating | Event Title, Category, Date, Start Time, End Time, Frequency, Repeat Days, Until, Location, Info |
+| Repeating | Event Title, Category, Date, Start Time, End Time, Repeats, Every, Until, Times, Location, Info |
+| Repeating All-Day | Event Title, Category, First Day, Last Day, Repeats, Every, Until, Times, Location, Info |
 
-- **Frequency** is a radio list: Daily, Weekly, Monthly, Yearly (UI: see 14).
-- **Repeat Days** is a single-select radio list of presets (UI: see 14b):
-  *Same day as the start* (first, so it's the default), *Weekdays (Mon–Fri)*,
-  *Weekends (Sat–Sun)* and *Every day*. chk's radio list
-  (`FormItem::enumerator`) is single-select, so custom day sets (for example
-  Monday and Wednesday only) aren't possible yet. Gus has asked chk's
-  developer for multi-select; it will replace the presets once it lands, but
-  the delivery date is unknown.
-- A chk form can't skip a step, so Repeat Days appears even when Frequency
-  isn't Weekly.
-- **Until** is a `DD-MM` date. Leaving it blank means the event never ends.
-- **Changing how it repeats** (`set_recurrence`) is a flow of Frequency,
-  Repeat Days and Until, then a review showing the current and new values,
-  for example "Weekly, same day as the start (Tue)" becoming "Weekly, weekdays
-  (Mon–Fri)" (UI: see 15). As with changing the time, the current value can
-  only appear on the review page.
+- **Repeats** is one single-select radio list (UI: see 14, 14b), replacing the
+  old Frequency and Repeat Days steps:
+
+  | Option | Subtitle | Stored as |
+  |--------|----------|-----------|
+  | Every day | | `Daily` |
+  | Every weekday | Mon–Fri | `Weekly { days: Mon..Fri }` |
+  | Every weekend | Sat–Sun | `Weekly { days: [Sat, Sun] }` |
+  | Every week | On the same day | `Weekly { days: [start weekday] }` |
+  | Every month | On the same date | `Monthly { day_of_month: start day }` |
+  | Every month | On the same weekday, e.g. 2nd Tue | `MonthlyWeekday` from the start date |
+  | Every year | On the same date | `Yearly` |
+
+  The form is built before Date is typed, so the labels can't name the day;
+  the review does. *Every day* is stored as `Daily`, never as a 7-day weekly
+  set. chk's radio list is single-select, so custom day sets (Monday and
+  Wednesday only) wait for chk multi-select.
+- **Every** is a number: every N days, weeks, months or years (weekday and
+  weekend sets: every N weeks), 1 to 99. Blank means 1.
+- **Until** is a `DD-MM` date read with `Event::date_from` from the start date,
+  so it's on or after the start and at most a year later. Until on the start
+  date means one occurrence. Blank means no end date.
+- **Times** is a number, 1 to 999: how many times in total. Blank means no
+  limit. With Until also set, the error is "Use Until or Times, not both." Both
+  blank means it never ends. Cancelled occurrences (3b) still count.
+- Every, Until and Times use chk's number and date keypads, which show fixed
+  hints ("Enter number", "Enter date") and start at "0" for a number. "0"
+  counts as blank. What blank means shows on the review instead (Ends:
+  "Never").
+- End Time uses the overnight rule; there's no End Date step. Last Day uses
+  the 28-day rule, and every occurrence lasts the same number of days.
+- The review adds **Repeats** (how often: "Daily", "Weekly", "Every 2 weeks",
+  "Monthly", "Yearly"), **On** (which days: "Tuesday", "Mon–Fri", "The 31st",
+  "3rd Tuesday", "Last Monday", "24 Dec"; none for daily), **First** (only when
+  it isn't the start date: "Mon 23 Nov 2026", or "No date matches") and
+  **Ends** ("Never", "On 30 Jun 2027", "After 10 times"). chk clips long table
+  values, so how often and which days are separate rows (`Recurrence::describe`).
+- The success message is "Repeating event saved, from 23 Nov 2026 at 09:00"
+  or "Repeating all-day event saved, from 24 Dec 2026", naming the first
+  occurrence.
+
+**Changing how it repeats** (`set_recurrence`, UI: see 15) is a flow of
+Repeats (with an eighth option, **Doesn't repeat**, last), Every, Until and
+Times, then a "Change Repeat Review" with Current and New tables of the rows
+above. Until is read from the later of the event's start date and today.
+Continue sends `set_recurrence` unless nothing changed, and returns to the
+detail page. As with changing the time, the current value can only appear on
+the review page.
+
+**Edits apply to the whole series in 3a.** Edit details, Change time, Change
+category, Change privacy, links and Delete act on the whole series until 3b
+adds the scope chooser (UI: see 16).
 
 #### Exceptions
 
@@ -368,7 +444,7 @@ The month screen has one button, **Create Event** (UI: see 01). It opens an
 *All-Day* ("Lasts one or more whole days") (UI: see 02). Regular is first, so
 it's the default. The picker has no review or success page; its submit returns
 `FormComplete::Return`, which resets navigation and opens the chosen form.
-Repeating is added as a third option in step 3a (see `Recurrence`).
+Repeating and Repeating All-Day were added in step 3a (see `Recurrence`).
 
 A chk form can't have optional or conditional steps, so each kind of event has
 its own form, one field per page (UI: see 03 and 04):
@@ -412,8 +488,8 @@ its own form, one field per page (UI: see 03 and 04):
   the last day if it's different). Done returns to the month screen (UI: see
   06).
 
-`DayScreen::time_label(event, day, zone) -> String` is how the views show an
-event's time: "All day", or the start and end in `zone`. Any part that isn't on
+`DayScreen::time_label(timing, day, zone) -> String` is how the views show an
+occurrence's time: "All day", or the start and end in `zone`. Any part that isn't on
 `day` also shows its date, e.g. "23:00–01:00 (16 Nov)".
 
 ### Methods on `Calendar`
@@ -443,9 +519,17 @@ That's fine before release, because nobody uses Coconut yet.
 reference to the `Event`, the occurrence's original date (needed to change or
 cancel just that occurrence), and its `Override` if it has one. For an event
 that doesn't repeat, there's only one. A moved occurrence appears on its new
-date, not its original one. For now, `Occurrence` holds only the `EventId` and
-the `Event`. The original date and the `Override` come with repeating events
-and exceptions (steps 3a and 3b).
+date, not its original one. Since step 3a, `Occurrence` has `date()` (the
+original date, in the event's zone) and `timing()` (this occurrence's own
+`Timing`; the event's `timing` is only the first one's). Views use `timing()`,
+and `on` sorts by it. The `Override` comes with exceptions (step 3b).
+
+`on` doesn't walk a series from its start. For each event it checks only the
+start dates that could reach `date`: from `date` minus the event's length in
+days, minus 2, to `date` plus 2. Zones are up to 26 hours apart, so moving an
+occurrence into the viewer's zone shifts it by at most 2 days. With `count`,
+the last occurrence is found once per check by stepping through at most
+`count` occurrences, a period at a time, and then treated like `until`.
 
 **Creating and deleting:**
 
@@ -499,16 +583,49 @@ never arrived, and AIR's pending state has no way to report that. When
 
 `set_timing` also cancels every open time proposal on the event.
 
+`set_recurrence` sends `CalendarMessage::SetRecurrence { id, recurrence }`,
+appended after `RemoveAttachment` in step 3a. `None` stops the event
+repeating.
+
+**Checking a recurrence.** `Recurrence::is_valid(&self, timing: &Timing) ->
+bool` is the one rule the forms and `apply` share. A recurrence is valid when:
+
+- `Weekly { days }` isn't empty. `apply` first sorts `days` Mon..Sun and drops
+  duplicates (it normalises, it doesn't reject).
+- `Monthly { day_of_month }` equals the start date's day (so it's 1 to 31).
+- `MonthlyWeekday { week, weekday }` matches the start date's week of the
+  month and weekday.
+- `interval` is 1 to 99, `count` (if set) is 1 to 999, `until` (if set) is on
+  or after the start date, and `until` and `count` aren't both set.
+
+In `apply`:
+
+- `CreateEvent` keeps a valid recurrence. An invalid one, or one with
+  exceptions, makes it ignore the whole event.
+- `SetRecurrence` ignores the incoming exceptions and keeps the event's own
+  (empty in 3a; in 3b only their own messages change them). It ignores the
+  message if the result isn't valid.
+- `SetTiming` on a repeating event keeps the rule meaningful when the start
+  date moves: `Monthly` takes the new start's day, `MonthlyWeekday` the new
+  start's week and weekday, and a one-day `Weekly` set on the old start's
+  weekday (the "same day" option) moves to the new start's weekday. Other
+  weekly sets stay. If the result isn't valid (for example `until` is now
+  before the start), it ignores the whole message, so Change time's Date step
+  checks this too ("Must be on or before the repeat ends.").
+
 **Editing screens (step 2).** Tapping an event in the day view opens its
 **event detail** page (UI: see 07): a table of Time, Category, Location, Info,
 Private and Video link, the attachment links, and the actions Edit details,
-Change time, Change category, Change privacy and Delete. chk can only pre-fill text inputs, so
+Change time, Change category, Change privacy and Delete. Since step 3a, the
+Time row is the tapped occurrence's time, a repeating event adds Repeats, On,
+First and Ends rows after Time, and there's a Change repeat action. On the day
+screen, a repeating event's subtitle is its category plus "Repeats". chk can only pre-fill text inputs, so
 editing is split:
 
 | Screen | What it changes | How |
 |--------|-----------------|-----|
 | Edit details (UI: see 08) | Title, Location, Info, Video link | One page (`Form::page` / `PageType::edit_and_display`) with a `FormItem::text_with_preset` for each field, filled with the current values. Save stays off until something changes and every field is valid. Calls the setter for each changed field. |
-| Change time (UI: see 09) | `timing` | A flow: Date, Start Time, End Date, End Time, then a review showing the current and new times. Date is on or after today; End Date uses the same rule as Last Day (on or after the start, at most 28 days later). Times are typed and shown in the event's own time zone (the `time_zone` in its `Timing`), and the review names it. An all-day event changed to timed uses the device's zone. Calls `set_timing`, unless the timing is unchanged. |
+| Change time (UI: see 09) | `timing` | A flow: Date, Start Time, End Date, End Time, then a review showing the current and new times. Step titles are plain ("Start Time", "End Time"): chk clips longer ones. Date is on or after today; End Date uses the same rule as Last Day (on or after the start, at most 28 days later). Times are typed and shown in the event's own time zone (the `time_zone` in its `Timing`), and the review names it. An all-day event changed to timed uses the device's zone. Calls `set_timing`, unless the timing is unchanged. |
 | Change to all-day or timed (UI: see 10) | `timing` | A picker like the event-type picker (Timed / All-day, with the current timing in the first option's subtitle), then the matching timing flow. |
 | Change category or privacy (UI: see 11) | `category`, `private` | A one-step radio page: Personal / Work, or Not private / Private. The radio always starts on its first option, so the current value is shown as that option's subtitle. Calls `set_category` or `set_private`. |
 | Add attachment link (UI: see 12) | `attachments` | A text step with a Paste action. Calls `add_attachment`. Each link on the detail page has a Delete action (`remove_attachment`). No file upload. |
@@ -855,14 +972,17 @@ doesn't decide yet. The open questions in sections 2 and 4 still stand.
 
 **Repeating events and exceptions**
 
-- **Repeat Days when Frequency isn't Weekly.** The step always shows (UI: see
-  14b). What does each preset mean for Daily, Monthly and Yearly, and does
-  *Every day* with Weekly mean the same as Daily?
-- **Repeating all-day events.** The Repeating form only has timed steps
-  (UI: see 14). One Repeating option that asks timed or all-day, or two picker
-  options?
-- **Repeat options.** Add "every N weeks", "nth weekday of the month" and
-  "after N times" (Google has all three), or keep the four frequencies?
+- **Repeat Days when Frequency isn't Weekly.** Decided 2026-11-17: Frequency
+  and Repeat Days are one Repeats step with seven options (see `Recurrence`).
+- **Repeating all-day events.** Decided 2026-11-17: a fourth picker option,
+  Repeating All-Day, with its own form.
+- **Repeat options.** Decided 2026-11-17: every N, the nth weekday of the
+  month, and ending after N times are in 1.0. Still open: choosing 4th or
+  last weekday when the start is on the 22nd–28th and also the month's last.
+- **A start date that doesn't match the rule.** Decided 2026-11-17: the first
+  occurrence is the first matching date on or after it; the review shows First.
+- **Editing a repeating event in 3a.** Decided 2026-11-17: every edit applies
+  to the whole series until 3b.
 - **Ask the scope before or after editing?** Design v1 asks first (UI: see 16);
   Google asks after Save. Is asking first OK?
 - **"This and following" on the first occurrence.** The mockup note suggests

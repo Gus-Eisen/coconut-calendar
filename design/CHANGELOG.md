@@ -43,3 +43,9 @@ them into the next design version instead.
   date means the first such date on or after today, not "from the 1st of this month".
   Last Day (and Change time's End Date on 09) is the first such date on or after the start,
   at most 28 days later ("Must be on or after the start."). (2026-11-17)
+- **13, 14, 14b, 15 Repeating events:** the picker has four options (Repeating All-Day after
+  Repeating). Frequency and Repeat Days are one "Repeats" radio of seven options; Every,
+  Until and Times steps follow. No End Date step. The review shows Repeats, On, First (only
+  when the first occurrence isn't the typed date) and Ends rows, not one long Repeats line,
+  because chk clips long values. Change repeat's Repeats list adds "Doesn't repeat" last.
+  Step titles are plain ("Start Time", "End Time"); chk clips longer ones. (2026-11-17)
