@@ -696,8 +696,11 @@ bool` is the one rule the forms and `apply` share. A recurrence is valid when:
 In `apply`:
 
 - `CreateEvent` keeps a valid recurrence. An invalid one, or one with
-  exceptions, makes it ignore the whole event. It also trims `link` with
-  `Event::optional`, so a blank or whitespace link is stored as `None`.
+  exceptions, makes it ignore the whole event. It stores `title`,
+  `location` and `info` trimmed, the same way as `link` (a blank
+  location or info becomes `None`, and a blank title is still
+  ignored). `SetTitle`, `SetLocation`, `SetInfo` and `SetLink` trim
+  too; `SetTitle` also ignores a blank title.
 - `SetRecurrence` ignores the incoming exceptions and keeps the event's own,
   since only their own messages change them. It ignores the message if the
   result isn't valid. Otherwise it drops the exceptions whose original date
