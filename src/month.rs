@@ -19,36 +19,10 @@ impl MonthScreen {
         Root::custom(Page::watching(
             Watch::contract(Calendar::open(ctx)),
             |_ctx: &mut Context, _theme: &Theme, calendar: Instance<Calendar>| {
-                let state = calendar.pending();
-                let zone = Timing::device_zone();
-                let now = Utc::now();
-                let today = now.with_timezone(&zone).date_naive();
-                let first = Event::window_start();
-                let months = (0..13u32)
-                    .map(|month| {
-                        let start = first + Months::new(month);
-                        let end = start + Months::new(1);
-                        let days = start
-                            .iter_days()
-                            .take_while(|day| *day < end)
-                            .map(|day| {
-                                let summary = Self::summary(&state.on(day, zone), day, now, zone);
-                                let weekday = match day == today {
-                                    true => format!("{} · Today", day.format("%A")),
-                                    false => day.format("%A").to_string(),
-                                };
-                                ListItem::plain(
-                                    &day.day().to_string(),
-                                    &weekday,
-                                    summary.as_deref(),
-                                    Some(DayScreen::flow(calendar.clone(), day)),
-                                )
-                                .with_badge(day == today)
-                            })
-                            .collect();
-                        Display::list(Some(&start.format("%B %Y").to_string()), days, None)
-                    })
-                    .collect();
+                let (state, now, first) = (calendar.pending(), Utc::now(), Event::window_start());
+                let months = (0..13u32).map(|month| {
+                    Self::month_display(&calendar, &state, first + Months::new(month), now)
+                }).collect();
                 drop(state);
                 let new_event = Box::new(move |_ctx: &mut Context, theme: &Theme| {
                     Flow::from_form(NewEvent::picker(theme, calendar.clone(), None))
@@ -59,6 +33,23 @@ impl MonthScreen {
                 )
             },
         ))
+    }
+
+    /// One month's list, from its first day `start`: a row per day, each opening that day.
+    fn month_display(calendar: &Instance<Calendar>, state: &Calendar, start: NaiveDate, now: DateTime<Utc>) -> Display {
+        let (zone, today) = (Timing::device_zone(), Timing::today());
+        let end = start + Months::new(1);
+        let days = start.iter_days().take_while(|day| *day < end).map(|day| {
+            let summary = Self::summary(&state.on(day, zone), day, now, zone);
+            let weekday = match day == today {
+                true => format!("{} · Today", day.format("%A")),
+                false => day.format("%A").to_string(),
+            };
+            let flow = DayScreen::flow(calendar.clone(), day);
+            ListItem::plain(&day.day().to_string(), &weekday, summary.as_deref(), Some(flow))
+                .with_badge(day == today)
+        }).collect();
+        Display::list(Some(&start.format("%B %Y").to_string()), days, None)
     }
 
     /// The day's row summary in `zone`: its one event, even after it has ended. With several,
@@ -83,8 +74,7 @@ impl MonthScreen {
         // The start only; on a later day of an event that started earlier, with its date.
         let time = match occurrence.timing().in_zone(zone) {
             None => "All day".to_string(),
-            Some((start, _)) if start.date() == day => start.format("%H:%M").to_string(),
-            Some((start, _)) => start.format("%H:%M (%-d %b)").to_string(),
+            Some((start, _)) => DayScreen::clock_label(start, day),
         };
         Some(format!("{time} {}", occurrence.title()))
     }
@@ -125,8 +115,7 @@ impl DayScreen {
                 };
                 let title = day.format("%a %-d %b").to_string();
                 // A past day can't get a new event: the forms only make today or later.
-                let today = Utc::now().with_timezone(&zone).date_naive();
-                let bumper = match day >= today {
+                let bumper = match day >= Timing::today() {
                     true => {
                         let picker = NewEvent::picker(theme, calendar.clone(), Some(day));
                         Bumper::custom("Create Event", Action::flow(Flow::from_form(picker)))
@@ -141,10 +130,11 @@ impl DayScreen {
     /// "All day", or the start and end in `zone`, with the date on any part that isn't on `day`.
     pub fn time_label(timing: &Timing, day: NaiveDate, zone: Tz) -> String {
         let Some((start, end)) = timing.in_zone(zone) else { return "All day".into() };
-        let label = |time: NaiveDateTime| {
-            let format = if time.date() == day { "%H:%M" } else { "%H:%M (%-d %b)" };
-            time.format(format).to_string()
-        };
-        format!("{}–{}", label(start), label(end))
+        format!("{}–{}", Self::clock_label(start, day), Self::clock_label(end, day))
+    }
+
+    /// A time as "HH:MM", with its date when it isn't on `day`: "HH:MM (3 Nov)".
+    fn clock_label(time: NaiveDateTime, day: NaiveDate) -> String {
+        time.format(if time.date() == day { "%H:%M" } else { "%H:%M (%-d %b)" }).to_string()
     }
 }

@@ -2,7 +2,7 @@ use chk::{
     Context, Display, Flow, Form, FormComplete, FormItem, FormSubmit, FormValidState,
     NumberVariant, Review, State, TableItem, Theme,
 };
-use chrono::{Local, NaiveDate, NaiveTime};
+use chrono::{NaiveDate, NaiveTime};
 use chrono_tz::Tz;
 use ramp::prism::air::Instance;
 
@@ -139,7 +139,7 @@ impl ChangeRepeat {
         // Compared without exceptions, as the form's rule never has any.
         let current = event.recurrence().map(Recurrence::rule);
         let start = event.timing().start_date();
-        let earliest = start.max(Local::now().date_naive());
+        let earliest = start.max(Timing::today());
         let times = FormTimes { date: Some(earliest), ..FormTimes::default() };
         let times = Rc::new(RefCell::new(times));
 
@@ -167,27 +167,24 @@ impl ChangeRepeat {
     /// The line a whole-series review shows when the change drops single changes; Change time
     /// uses it too.
     fn warning(dropped: usize) -> Option<Display> {
-        match dropped {
-            0 => None,
-            1 => Some(Display::instructions("1 single change will be removed.")),
-            dropped => {
-                Some(Display::instructions(&format!("{dropped} single changes will be removed.")))
-            }
-        }
+        let plural = if dropped == 1 { "" } else { "s" };
+        let message = format!("{dropped} single change{plural} will be removed.");
+        (dropped > 0).then(|| Display::instructions(&message))
     }
 
+    /// A review's repeat table: "Doesn't repeat" when there's no rule.
     fn table(label: &str, recurrence: Option<&Recurrence>, start: NaiveDate) -> Display {
-        let rows = Self::rows(recurrence, start).into_iter()
-            .map(|(label, value)| TableItem::new(label, &value)).collect();
+        let rows = match recurrence {
+            Some(recurrence) => Self::rows(recurrence, start),
+            None => vec![("Repeats", "Doesn't repeat".into())],
+        };
+        let rows = rows.into_iter().map(|(label, value)| TableItem::new(label, &value)).collect();
         Display::table(label, rows, None)
     }
 
     /// Repeats, On, First (only when it isn't the start date) and Ends, as the reviews and
     /// the detail page show them. Short rows, because chk clips long table values.
-    pub fn rows(recurrence: Option<&Recurrence>, start: NaiveDate) -> Vec<(&'static str, String)> {
-        let Some(recurrence) = recurrence else {
-            return vec![("Repeats", "Doesn't repeat".into())];
-        };
+    pub fn rows(recurrence: &Recurrence, start: NaiveDate) -> Vec<(&'static str, String)> {
         let (often, days) = recurrence.describe(start);
         let first = match recurrence.first(start) {
             Some(first) if first == start => None,

@@ -130,10 +130,8 @@ impl NewEvent {
 
     fn review(event: &Event) -> Vec<Display> {
         let start = event.timing().start_date();
-        let repeat = match event.recurrence() {
-            Some(recurrence) => ChangeRepeat::rows(Some(recurrence), start),
-            None => vec![],
-        };
+        let repeat = event.recurrence()
+            .map(|recurrence| ChangeRepeat::rows(recurrence, start)).unwrap_or_default();
         let rows = [
             vec![
                 ("Title", event.title().to_string()),

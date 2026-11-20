@@ -38,6 +38,11 @@ impl Timing {
         iana_time_zone::get_timezone().ok().and_then(|zone| zone.parse().ok()).unwrap_or(Tz::UTC)
     }
 
+    /// Today's date in the device's time zone.
+    pub fn today() -> NaiveDate {
+        Utc::now().with_timezone(&Self::device_zone()).date_naive()
+    }
+
     /// The regular form's timing: it ends on `date`, or the next day if `end` is earlier than
     /// `start`. `None` if `end` equals `start`.
     pub fn from_times(date: NaiveDate, start: NaiveTime, end: NaiveTime, time_zone: Tz) -> Option<Timing> {

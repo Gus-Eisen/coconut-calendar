@@ -35,78 +35,17 @@ impl EventScreen {
                 };
                 let event = series.effective(date).unwrap_or_else(|| series.clone());
                 let changed = series.changes(date).is_some();
-                let zone = Timing::device_zone();
-
-                let series_time = series.series_timing(date)
-                    .filter(|timing| changed && timing != event.timing())
-                    .map(|timing| ("Series time", Self::when(&timing, zone)));
-                let repeat = match series.recurrence() {
-                    Some(recurrence) => ChangeRepeat::rows(Some(recurrence), start),
-                    None => vec![],
-                };
-                let rows = [
-                    [Some(("Time", Self::when(event.timing(), zone))), series_time]
-                        .into_iter().flatten().collect(),
-                    repeat,
-                    [
-                        Some(("Category", event.category().label().to_string())),
-                        event.location().map(|location| ("Location", location.to_string())),
-                        event.info().map(|info| ("Info", info.to_string())),
-                        event.link().map(|link| ("Link", link.to_string())),
-                        Some(("Private", if event.private() { "Yes" } else { "No" }.to_string())),
-                    ].into_iter().flatten().collect(),
-                ];
 
                 let header_edit = Self::edit(theme, &calendar, id, date, &series);
-                let edit = Action::flow(header_edit.clone());
-                let time = Self::scoped(
-                    theme, &series, date,
-                    Self::open({
-                        let (calendar, series) = (calendar.clone(), series.clone());
-                        move |theme: &Theme| {
-                            let scope = Scope::Occurrence(date);
-                            ChangeTime::picker(theme, calendar.clone(), id, &series, scope)
-                        }
-                    }),
-                    Self::open({
-                        let (calendar, series) = (calendar.clone(), series.clone());
-                        move |theme: &Theme| {
-                            ChangeTime::picker(theme, calendar.clone(), id, &series, Scope::Series)
-                        }
-                    }),
+                let actions = Self::actions(
+                    theme, &calendar, id, date, &series, changed, header_edit.clone(),
                 );
-                let forms = [
-                    ("Change repeat", ChangeRepeat::form(theme, calendar.clone(), id, &series)),
-                    ("Change category", Self::category(theme, calendar.clone(), id, &series)),
-                    ("Change privacy", Self::privacy(theme, calendar.clone(), id, &series)),
-                ];
-                let mut restoring = calendar.clone();
-                let restore = Action::custom(move |_ctx: &mut Context, _theme: &Theme| {
-                    Calendar::restore_occurrence(&mut restoring, id, date)
-                });
-                let actions = [
-                    ActionItem::new(edit, "Edit details", Icons::Edit),
-                    ActionItem::new(time, "Change time", Icons::Edit),
-                ]
-                    .into_iter()
-                    .chain(forms.into_iter().map(|(label, form)| {
-                        ActionItem::new(Action::flow(Flow::from_form(form)), label, Icons::Edit)
-                    }))
-                    .chain(changed.then(|| ActionItem::new(restore, "Restore", Icons::Back)))
-                    .chain([ActionItem::new(
-                        Self::delete(theme, &calendar, id, date, &series), "Delete", Icons::Delete,
-                    )])
-                    .collect();
+                let table = Display::table(
+                    "Event", Self::rows(&series, &event, date, changed), Some(actions),
+                );
                 let changed_line = changed.then(|| {
                     Display::instructions("This occurrence was changed.")
                 });
-                let table = Display::table(
-                    "Event",
-                    rows.into_iter().flatten()
-                        .map(|(label, value)| TableItem::new(label, &value)).collect(),
-                    Some(actions),
-                );
-
                 let header = Box::new(move |_ctx: &mut Context, _theme: &Theme| {
                     header_edit.clone()
                 });
@@ -119,6 +58,69 @@ impl EventScreen {
                 )
             },
         )])
+    }
+
+    /// The detail table for `event`, the occurrence on `date`: Time (and Series time when this
+    /// occurrence moved), the repeat rows, Category, Location, Info, Link and Private.
+    fn rows(series: &Event, event: &Event, date: NaiveDate, changed: bool) -> Vec<TableItem> {
+        let zone = Timing::device_zone();
+        let series_time = series.series_timing(date)
+            .filter(|timing| changed && timing != event.timing())
+            .map(|timing| ("Series time", Self::when(&timing, zone)));
+        let start = series.timing().start_date();
+        let repeat = series.recurrence()
+            .map(|recurrence| ChangeRepeat::rows(recurrence, start)).unwrap_or_default();
+        let rows = [
+            [Some(("Time", Self::when(event.timing(), zone))), series_time]
+                .into_iter().flatten().collect(),
+            repeat,
+            [
+                Some(("Category", event.category().label().to_string())),
+                event.location().map(|location| ("Location", location.to_string())),
+                event.info().map(|info| ("Info", info.to_string())),
+                event.link().map(|link| ("Link", link.to_string())),
+                Some(("Private", if event.private() { "Yes" } else { "No" }.to_string())),
+            ].into_iter().flatten().collect(),
+        ];
+        rows.into_iter().flatten().map(|(label, value)| TableItem::new(label, &value)).collect()
+    }
+
+    /// The detail page's buttons. `edit` is the Edit details flow, shared with the header icon;
+    /// Restore shows only when this occurrence was changed.
+    fn actions(
+        theme: &Theme, calendar: &Instance<Calendar>, id: EventId, date: NaiveDate, series: &Event,
+        changed: bool, edit: Flow,
+    ) -> Vec<ActionItem> {
+        let time = |scope: Scope| {
+            let (calendar, series) = (calendar.clone(), series.clone());
+            Self::open(move |theme: &Theme| {
+                ChangeTime::picker(theme, calendar.clone(), id, &series, scope)
+            })
+        };
+        let time =
+            Self::scoped(theme, series, date, time(Scope::Occurrence(date)), time(Scope::Series));
+        let forms = [
+            ("Change repeat", ChangeRepeat::form(theme, calendar.clone(), id, series)),
+            ("Change category", Self::category(theme, calendar.clone(), id, series)),
+            ("Change privacy", Self::privacy(theme, calendar.clone(), id, series)),
+        ];
+        let mut restoring = calendar.clone();
+        let restore = Action::custom(move |_ctx: &mut Context, _theme: &Theme| {
+            Calendar::restore_occurrence(&mut restoring, id, date)
+        });
+        [
+            ActionItem::new(Action::flow(edit), "Edit details", Icons::Edit),
+            ActionItem::new(time, "Change time", Icons::Edit),
+        ]
+            .into_iter()
+            .chain(forms.into_iter().map(|(label, form)| {
+                ActionItem::new(Action::flow(Flow::from_form(form)), label, Icons::Edit)
+            }))
+            .chain(changed.then(|| ActionItem::new(restore, "Restore", Icons::Back)))
+            .chain([ActionItem::new(
+                Self::delete(theme, calendar, id, date, series), "Delete", Icons::Delete,
+            )])
+            .collect()
     }
 
     /// The page once there's nothing left to show.
@@ -210,13 +212,10 @@ impl EventScreen {
         };
         let mut changes = current.clone().unwrap_or_default();
         edit(&mut changes, &series);
-        match changes.is_empty() {
-            true if current.is_some() => Calendar::restore_occurrence(calendar, id, date),
-            true => {}
-            false if current.as_ref() != Some(&changes) => {
-                Calendar::change_occurrence(calendar, id, date, changes)
-            }
-            false => {}
+        if changes.is_empty() && current.is_some() {
+            Calendar::restore_occurrence(calendar, id, date);
+        } else if !changes.is_empty() && current.as_ref() != Some(&changes) {
+            Calendar::change_occurrence(calendar, id, date, changes);
         }
     }
 
@@ -291,55 +290,46 @@ impl EventScreen {
 
     /// Save sends one message per field that changed, comparing after trimming.
     fn edit_details(mut calendar: Instance<Calendar>, id: EventId, event: &Event) -> Form {
-        let save = Box::new(move |_ctx: &mut Context, states: &Vec<State>| {
-            let [State::Text(title), State::Text(location), State::Text(info), State::Text(link)] =
-                states.as_slice() else { unreachable!() };
+        Self::details_page(event, move |title, location, info, link| {
             // The live event, not the one the page opened with, so a second Save on the same page
             // only sends what changed since the first.
-            let Some(event) = calendar.pending().event(id).cloned() else {
-                return FormComplete::None;
-            };
-            if let Some(title) = Event::optional(title) && title != event.title() {
-                Calendar::set_title(&mut calendar, id, title);
+            let Some(event) = calendar.pending().event(id).cloned() else { return };
+            if title != event.title() { Calendar::set_title(&mut calendar, id, title); }
+            let optional = [
+                (location, event.location(), Calendar::set_location as fn(&mut _, _, _)),
+                (info, event.info(), Calendar::set_info),
+                (link, event.link(), Calendar::set_link),
+            ];
+            for (new, old, set) in optional {
+                if new.as_deref() != old { set(&mut calendar, id, new); }
             }
-            let location = Event::optional(location);
-            if location.as_deref() != event.location() {
-                Calendar::set_location(&mut calendar, id, location);
-            }
-            let info = Event::optional(info);
-            if info.as_deref() != event.info() { Calendar::set_info(&mut calendar, id, info); }
-            let link = Event::optional(link);
-            if link.as_deref() != event.link() {
-                Calendar::set_link(&mut calendar, id, link);
-            }
-            FormComplete::None
-        }) as Box<dyn FormSubmit>;
-        Self::details_page(event, save)
+        })
     }
 
     /// Edit details for one occurrence: filled with its own values. Save sends them as one
     /// `change_occurrence`; a field equal to the series' is stored as "same as the series".
     fn edit_occurrence(mut calendar: Instance<Calendar>, id: EventId, date: NaiveDate, series: &Event) -> Form {
         let event = series.effective(date).unwrap_or_else(|| series.clone());
-        let save = Box::new(move |_ctx: &mut Context, states: &Vec<State>| {
-            let [State::Text(title), State::Text(location), State::Text(info), State::Text(link)] =
-                states.as_slice() else { unreachable!() };
-            let Some(title) = Event::optional(title) else { return FormComplete::None };
-            let (location, info, link) =
-                (Event::optional(location), Event::optional(info), Event::optional(link));
+        Self::details_page(&event, move |title, location, info, link| {
             Self::change(&mut calendar, id, date, |changes, series| {
                 changes.set_title(title, series.title());
                 changes.set_location(location, series.location());
                 changes.set_info(info, series.info());
                 changes.set_link(link, series.link());
             });
-            FormComplete::None
-        }) as Box<dyn FormSubmit>;
-        Self::details_page(&event, save)
+        })
     }
 
-    /// The Edit details page, filled with `event`'s values.
-    fn details_page(event: &Event, save: Box<dyn FormSubmit>) -> Form {
+    /// The Edit details page, filled with `event`'s values. Save trims every field once and
+    /// hands `save` the title, location, info and link; a blank title saves nothing.
+    fn details_page(event: &Event, mut save: impl FnMut(String, Option<String>, Option<String>, Option<String>) + Clone + 'static) -> Form {
+        let submit = Box::new(move |_ctx: &mut Context, states: &Vec<State>| {
+            let [State::Text(title), State::Text(location), State::Text(info), State::Text(link)] =
+                states.as_slice() else { unreachable!() };
+            let Some(title) = Event::optional(title) else { return FormComplete::None };
+            save(title, Event::optional(location), Event::optional(info), Event::optional(link));
+            FormComplete::None
+        }) as Box<dyn FormSubmit>;
         let optional = |label: &str, value: Option<&str>| {
             FormItem::text_with_preset(
                 label, value.unwrap_or(""), None,
@@ -358,7 +348,7 @@ impl EventScreen {
             optional("Info", event.info()),
             optional("Link", event.link()),
         ];
-        Form::page("Edit Event", items, vec![], save)
+        Form::page("Edit Event", items, vec![], submit)
     }
 
     fn category(theme: &Theme, mut calendar: Instance<Calendar>, id: EventId, event: &Event) -> Form {

@@ -1,5 +1,5 @@
 use chk::{Context, State};
-use chrono::{Datelike, Days, Local, NaiveDate, NaiveTime};
+use chrono::{Datelike, Days, NaiveDate, NaiveTime};
 use chrono_tz::Tz;
 use ramp::prism::air::{Contract, Id, Instance, Metadata, Name};
 use serde::{Deserialize, Serialize};
@@ -62,11 +62,11 @@ pub struct Event {
 
 impl Event {
     pub fn window_start() -> NaiveDate {
-        Local::now().date_naive().with_day(1).unwrap()
+        Timing::today().with_day(1).unwrap()
     }
 
     pub fn date(input: &str) -> Option<NaiveDate> {
-        Self::date_from(input, Local::now().date_naive())
+        Self::date_from(input, Timing::today())
     }
 
     /// The first `DD-MM` date on or after `earliest`: `earliest`'s year, else the next year.
