@@ -8,7 +8,6 @@ use ramp::prism::air::Instance;
 
 use crate::{Calendar, Category, Event, EventId, Exception, Override, Timing};
 
-use super::DayScreen;
 use super::schedule::{ChangeRepeat, ChangeTime};
 
 /// What an edit applies to: the whole series, or one occurrence by its original date.
@@ -80,9 +79,13 @@ impl EventScreen {
             Timing::Timed { .. } => {
                 // `apply` stores only valid timings and `occurrence` returns only valid ones, so
                 // `in_zone` can't panic.
-                let (start, _) = timing.in_zone(zone).unwrap();
-                let time = DayScreen::time_label(timing, start.date(), zone);
-                format!("{time}, {}", day(start.date()))
+                let (start, end) = timing.in_zone(zone).unwrap();
+                let end_time = Timing::format_time(end.time());
+                let end_time = match end.date() == start.date() {
+                    true => end_time,
+                    false => format!("{end_time} ({})", end.format("%-d %b")),
+                };
+                format!("{}–{end_time}, {}", Timing::format_time(start.time()), day(start.date()))
             }
         }
     }

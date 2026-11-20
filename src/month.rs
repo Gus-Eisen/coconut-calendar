@@ -1,6 +1,8 @@
 use chk::{
     Action, Bumper, Context, Display, Flow, ListItem, Offset, Page, PageType, Root, Theme, Watch,
 };
+use ramp::prism::drawable::Color;
+use ramp::prism::drawable::text::{Align, Text};
 use chrono::{DateTime, Datelike, Months, NaiveDate, NaiveDateTime, Utc};
 use chrono_tz::Tz;
 use ramp::prism::air::Instance;
@@ -18,12 +20,14 @@ impl MonthScreen {
     pub fn root(ctx: &mut Context) -> Root {
         Root::custom(Page::watching(
             Watch::contract(Calendar::open(ctx)),
-            |_ctx: &mut Context, _theme: &Theme, calendar: Instance<Calendar>| {
+            |ctx: &mut Context, theme: &Theme, calendar: Instance<Calendar>| {
                 let (state, now, first) = (calendar.pending(), Utc::now(), Event::window_start());
-                let (zone, today) = (Timing::device_zone(), Timing::today());
+                let zone = Timing::device_zone();
                 let months = (0..13u32)
                     .map(|month| first + Months::new(month))
-                    .map(|start| Self::month_display(&calendar, &state, start, now, zone, today))
+                    .map(|start| {
+                        Self::month_display(ctx, theme, &calendar, &state, start, now, zone)
+                    })
                     .collect();
                 drop(state);
                 let new_event = Box::new(move |_ctx: &mut Context, theme: &Theme| {
@@ -38,10 +42,16 @@ impl MonthScreen {
     }
 
     /// One month's list, from its first day `start`: a row per day, each opening that day.
-    fn month_display(calendar: &Instance<Calendar>, state: &Calendar, start: NaiveDate, now: DateTime<Utc>, zone: Tz, today: NaiveDate) -> Display {
+    fn month_display(
+        ctx: &Context, theme: &Theme, calendar: &Instance<Calendar>, state: &Calendar,
+        start: NaiveDate, now: DateTime<Utc>, zone: Tz,
+    ) -> Display {
+        // `Timing::today()`, at the same instant as the summaries' "has it ended?".
+        let today = now.with_timezone(&zone).date_naive();
         let end = start + Months::new(1);
         let days = start.iter_days().take_while(|day| *day < end).map(|day| {
-            let summary = Self::summary(&state.on(day, zone), day, now, zone);
+            let summary = Self::summary(&state.on(day, zone), day, now, zone)
+                .map(|summary| DayScreen::fit_label(ctx, theme, &summary));
             let weekday = match day == today {
                 true => format!("{} · Today", day.format("%A")),
                 false => day.format("%A").to_string(),
@@ -72,10 +82,14 @@ impl MonthScreen {
             }
         };
         let Some(occurrence) = shown else { return Some(format!("{} events", occurrences.len())) };
-        // The start only; on a later day of an event that started earlier, with its date.
+        // The start; on a later day of an event that started earlier, when it ends instead.
         let time = match occurrence.timing().in_zone(zone) {
             None => "All day".to_string(),
-            Some((start, _)) => DayScreen::clock_label(start, day),
+            Some((start, _)) if start.date() == day => Timing::format_short_time(start.time()),
+            Some((_, end)) if end.date() == day => {
+                format!("until {}", Timing::format_short_time(end.time()))
+            }
+            Some((_, end)) => format!("until {}", end.format("%-d %b")),
         };
         Some(format!("{time} {}", occurrence.title()))
     }
@@ -88,7 +102,7 @@ impl DayScreen {
     pub fn flow(calendar: Instance<Calendar>, day: NaiveDate) -> Flow {
         Flow::new(vec![Page::watching(
             Watch::contract(calendar),
-            move |_ctx: &mut Context, theme: &Theme, calendar: Instance<Calendar>| {
+            move |ctx: &mut Context, theme: &Theme, calendar: Instance<Calendar>| {
                 let zone = Timing::device_zone();
                 let rows = calendar
                     .pending()
@@ -103,10 +117,12 @@ impl DayScreen {
                             (None, Some(location)) => format!("{category} · {location}"),
                             (None, None) => category.to_string(),
                         };
+                        let title = Self::fit_label(ctx, theme, occurrence.title());
                         let time = Self::time_label(occurrence.timing(), day, zone);
+                        let time = Self::fit_label(ctx, theme, &time);
                         let detail =
                             EventScreen::flow(calendar.clone(), occurrence.id(), occurrence.date());
-                        ListItem::plain(occurrence.title(), &subtitle, Some(&time), Some(detail))
+                        ListItem::plain(&title, &subtitle, Some(&time), Some(detail))
                     })
                     .collect::<Vec<_>>();
                 // Deleting or cancelling the day's last event leaves the page open with nothing.
@@ -128,15 +144,44 @@ impl DayScreen {
         )])
     }
 
-    /// "All day", or the start and end in `zone`, with the date on any part that isn't on `day`.
-    pub fn time_label(timing: &Timing, day: NaiveDate, zone: Tz) -> String {
-        let Some((start, end)) = timing.in_zone(zone) else { return "All day".into() };
-        format!("{}–{}", Self::clock_label(start, day), Self::clock_label(end, day))
+    /// `text` shortened to fit one side of a list row, ending in "…" when it was cut. pelican
+    /// would clip it mid-letter instead. Measured with the renderer's own layout, in the row
+    /// font (Heading, H5).
+    fn fit_label(ctx: &Context, theme: &Theme, text: &str) -> String {
+        // pelican's content is at most 423 pt wide with 24 pt padding each side; the row's
+        // forward icon takes 32 pt and its two columns share the rest, 8 pt apart. 2 pt spare
+        // covers the renderer rounding widths up.
+        let half = (ctx.window.area().size.0.min(423.0) - 48.0 - 32.0 - 8.0) / 2.0;
+        let max_width = (half - 2.0).max(0.0);
+        let Some(font) = theme.fonts().get_font("FontStyle::Heading") else {
+            return text.to_string();
+        };
+        let size = theme.fonts().get_size("TextSize::H5");
+        let fits = |text: &str| {
+            let text = Text::new(text, font.clone(), size, Color::transparent(), Align::Left);
+            text.size().0.ceil() <= max_width
+        };
+        if max_width <= 0.0 || fits(text) { return text.to_string(); }
+        // The longest start of `text` that still fits with "…" after it.
+        let cut = |end: usize| format!("{}…", text[..end].trim_end());
+        let ends = text.char_indices().map(|(end, _)| end).collect::<Vec<_>>();
+        match ends.partition_point(|end| fits(&cut(*end))) {
+            0 => "…".to_string(),
+            fitting => cut(ends[fitting - 1]),
+        }
     }
 
-    /// A clock time, with its date when it isn't on `day`, e.g. "9:30 AM (3 Nov)".
-    fn clock_label(time: NaiveDateTime, day: NaiveDate) -> String {
-        let clock = Timing::format_time(time.time());
-        if time.date() == day { clock } else { format!("{clock} ({})", time.format("%-d %b")) }
+    /// The Day view's time in `zone`: "9:30 PM–10 PM" on one day; an event running past
+    /// midnight shows "from 11 PM" on its first day, then "until 1 AM", or "until 6 Dec" on a
+    /// day it neither starts nor ends.
+    fn time_label(timing: &Timing, day: NaiveDate, zone: Tz) -> String {
+        let Some((start, end)) = timing.in_zone(zone) else { return "All day".into() };
+        let short = |time: NaiveDateTime| Timing::format_short_time(time.time());
+        match (start.date() == day, end.date() == day) {
+            (true, true) => format!("{}–{}", short(start), short(end)),
+            (true, false) => format!("from {}", short(start)),
+            (false, true) => format!("until {}", short(end)),
+            (false, false) => format!("until {}", end.format("%-d %b")),
+        }
     }
 }

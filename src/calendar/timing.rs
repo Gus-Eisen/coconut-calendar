@@ -1,6 +1,6 @@
 use chk::State;
 use chrono::offset::LocalResult;
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, TimeZone, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
 use ramp::prism::air::{Id, Name};
 use serde::{Deserialize, Serialize};
@@ -44,6 +44,11 @@ impl Timing {
     }
 
     pub fn format_time(time: NaiveTime) -> String { time.format("%-I:%M %p").to_string() }
+
+    /// A list row's time, without ":00" on the hour: "11 PM", "9:30 PM".
+    pub fn format_short_time(time: NaiveTime) -> String {
+        time.format(if time.minute() == 0 { "%-I %p" } else { "%-I:%M %p" }).to_string()
+    }
 
     /// The regular form's timing: it ends on `date`, or the next day if `end` is earlier than
     /// `start`. `None` if `end` equals `start`.
