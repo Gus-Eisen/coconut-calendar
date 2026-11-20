@@ -200,6 +200,12 @@ impl NewEvent {
                 None,
                 |_ctx: &mut Context, _info: String| FormValidState::Valid,
             ),
+            FormItem::text(
+                "Link",
+                "Link (optional)",
+                None,
+                |_ctx: &mut Context, _link: String| FormValidState::Valid,
+            ),
         ];
 
         let items = [start, timing, end].into_iter().flatten().collect();
@@ -222,6 +228,7 @@ impl NewEvent {
             [
                 event.location().map(|location| ("Location", location.to_string())),
                 event.info().map(|info| ("Info", info.to_string())),
+                event.link().map(|link| ("Link", link.to_string())),
             ].into_iter().flatten().collect(),
         ];
         vec![Display::table(

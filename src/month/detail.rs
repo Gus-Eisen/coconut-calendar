@@ -1,6 +1,6 @@
 use chk::{
-    Action, ActionItem, Bumper, Context, Display, Flow, Form, FormAction, FormComplete, FormItem,
-    FormSubmit, FormValidState, Icons, Offset, Page, PageType, State, TableItem, Theme, Watch,
+    Action, ActionItem, Bumper, Context, Display, Flow, Form, FormComplete, FormItem, FormSubmit,
+    FormValidState, Icons, Offset, Page, PageType, State, TableItem, Theme, Watch,
 };
 use chrono::NaiveDate;
 use chrono_tz::Tz;
@@ -52,8 +52,8 @@ impl EventScreen {
                         Some(("Category", event.category().label().to_string())),
                         event.location().map(|location| ("Location", location.to_string())),
                         event.info().map(|info| ("Info", info.to_string())),
+                        event.link().map(|link| ("Link", link.to_string())),
                         Some(("Private", if event.private() { "Yes" } else { "No" }.to_string())),
-                        event.video_link().map(|link| ("Video link", link.to_string())),
                     ].into_iter().flatten().collect(),
                 ];
 
@@ -107,75 +107,12 @@ impl EventScreen {
                     Some(actions),
                 );
 
-                let attachments = event.attachments().to_vec();
-                let add_link = Self::scoped(
-                    theme, &series, date,
-                    Self::open({
-                        let (calendar, attachments) = (calendar.clone(), attachments.clone());
-                        move |theme: &Theme| {
-                            let (mut calendar, mut links) = (calendar.clone(), attachments.clone());
-                            Self::add_link(theme, move |link: String| {
-                                if !links.contains(&link) { links.push(link); }
-                                let links = links.clone();
-                                Self::change(&mut calendar, id, date, |changes, series| {
-                                    changes.set_attachments(links, series.attachments())
-                                })
-                            })
-                        }
-                    }),
-                    Self::open({
-                        let calendar = calendar.clone();
-                        move |theme: &Theme| {
-                            let mut calendar = calendar.clone();
-                            Self::add_link(theme, move |link: String| {
-                                Calendar::add_attachment(&mut calendar, id, link)
-                            })
-                        }
-                    }),
-                );
-                let attachments_list = Display::data_list(
-                    "Attachments",
-                    attachments.is_empty().then_some("No links yet."),
-                    vec![],
-                    Some(vec![ActionItem::new(add_link, "Add link", Icons::Link)]),
-                );
-                let links = attachments.iter().map(|link| {
-                    let this = {
-                        let mut calendar = calendar.clone();
-                        let kept = attachments.iter().filter(|kept| *kept != link)
-                            .cloned().collect::<Vec<_>>();
-                        move |_ctx: &mut Context, _theme: &Theme| {
-                            let kept = kept.clone();
-                            Self::change(&mut calendar, id, date, |changes, series| {
-                                changes.set_attachments(kept, series.attachments())
-                            })
-                        }
-                    };
-                    // If the occurrence has its own list, the link goes from that too, or it
-                    // would stay on screen. One that follows the series needs nothing more.
-                    let whole = {
-                        let (mut calendar, removed) = (calendar.clone(), link.clone());
-                        let mut this = this.clone();
-                        move |ctx: &mut Context, theme: &Theme| {
-                            Calendar::remove_attachment(&mut calendar, id, removed.clone());
-                            let own = calendar.pending().event(id)
-                                .and_then(|series| series.changes(date))
-                                .and_then(Override::attachments).is_some();
-                            if own { this(ctx, theme); }
-                        }
-                    };
-                    let remove = Self::scoped(theme, &series, date, this, whole);
-                    let delete = ActionItem::new(remove, "Delete", Icons::Delete);
-                    Display::cta(link, None, "Link", vec![delete])
-                });
-
                 let header = Box::new(move |_ctx: &mut Context, _theme: &Theme| {
                     header_edit.clone()
                 });
                 PageType::display(
                     event.title(),
-                    changed_line.into_iter().chain([table, attachments_list]).chain(links)
-                        .collect(),
+                    changed_line.into_iter().chain([table]).collect(),
                     Some((Icons::Edit, header)),
                     Bumper::None,
                     Offset::Start,
@@ -372,8 +309,8 @@ impl EventScreen {
             let info = Event::optional(info);
             if info.as_deref() != event.info() { Calendar::set_info(&mut calendar, id, info); }
             let link = Event::optional(link);
-            if link.as_deref() != event.video_link() {
-                Calendar::set_video_link(&mut calendar, id, link);
+            if link.as_deref() != event.link() {
+                Calendar::set_link(&mut calendar, id, link);
             }
             FormComplete::None
         }) as Box<dyn FormSubmit>;
@@ -394,7 +331,7 @@ impl EventScreen {
                 changes.set_title(title, series.title());
                 changes.set_location(location, series.location());
                 changes.set_info(info, series.info());
-                changes.set_video_link(link, series.video_link());
+                changes.set_link(link, series.link());
             });
             FormComplete::None
         }) as Box<dyn FormSubmit>;
@@ -419,7 +356,7 @@ impl EventScreen {
             ),
             optional("Location", event.location()),
             optional("Info", event.info()),
-            optional("Video link", event.video_link()),
+            optional("Link", event.link()),
         ];
         Form::page("Edit Event", items, vec![], save)
     }
@@ -456,23 +393,6 @@ impl EventScreen {
             .map(|(index, label)| (*label, if index == current { "Current" } else { "" }))
             .collect();
         Form::flow(theme, vec![FormItem::enumerator(title, options)], None, None, submit)
-    }
-
-    /// Links are plain text: anything that isn't blank is accepted. `save` gets it trimmed.
-    fn add_link(theme: &Theme, mut save: impl FnMut(String) + Clone + 'static) -> Form {
-        let submit = Box::new(move |_ctx: &mut Context, states: &Vec<State>| {
-            let [State::Text(link)] = states.as_slice() else { unreachable!() };
-            if let Some(link) = Event::optional(link) { save(link); }
-            Self::back()
-        }) as Box<dyn FormSubmit>;
-
-        let link = FormItem::text(
-            "Attachment", "Link", Some(vec![FormAction::Paste]),
-            |_ctx: &mut Context, link: String| {
-                if link.trim().is_empty() { FormValidState::Invalid } else { FormValidState::Valid }
-            },
-        );
-        Form::flow(theme, vec![link], None, None, submit)
     }
 }
 

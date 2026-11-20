@@ -52,8 +52,7 @@ pub struct Event {
     location: Option<String>,
     info: Option<String>,
     attendees: Vec<Attendee>,
-    video_link: Option<String>,
-    attachments: Vec<String>,
+    link: Option<String>,
     recurrence: Option<Recurrence>,
     category: Category,
     time_proposals: Vec<TimeProposal>,
@@ -84,11 +83,12 @@ impl Event {
     }
 
     /// Reads any new-event form. They differ only in their timing steps and, for the repeating
-    /// forms, the four repeat steps after them. Timed events use the device's time zone.
+    /// forms, the four repeat steps after them; all end with Location, Info and Link. Timed
+    /// events use the device's time zone.
     pub fn from_states(states: &[State]) -> Event {
         let [
             State::Text(title), State::Enumerator(category), steps @ .., State::Text(location),
-            State::Text(info),
+            State::Text(info), State::Text(link),
         ] = states else {
             unreachable!()
         };
@@ -104,8 +104,7 @@ impl Event {
             location: Self::optional(location),
             info: Self::optional(info),
             attendees: vec![],
-            video_link: None,
-            attachments: vec![],
+            link: Self::optional(link),
             recurrence: (!repeat.is_empty()).then(|| Recurrence::from_states(repeat, start, start))
                 .flatten(),
             category: Category::options()[*category],
@@ -120,8 +119,7 @@ impl Event {
     pub fn location(&self) -> Option<&str> { self.location.as_deref() }
     pub fn info(&self) -> Option<&str> { self.info.as_deref() }
     pub fn attendees(&self) -> &[Attendee] { &self.attendees }
-    pub fn video_link(&self) -> Option<&str> { self.video_link.as_deref() }
-    pub fn attachments(&self) -> &[String] { &self.attachments }
+    pub fn link(&self) -> Option<&str> { self.link.as_deref() }
     pub fn recurrence(&self) -> Option<&Recurrence> { self.recurrence.as_ref() }
     pub fn category(&self) -> Category { self.category }
     pub fn time_proposals(&self) -> &[TimeProposal] { &self.time_proposals }
@@ -179,10 +177,7 @@ impl Event {
             event.location = location.map(str::to_string);
         }
         if let Some(info) = changes.info() { event.info = info.map(str::to_string); }
-        if let Some(link) = changes.video_link() { event.video_link = link.map(str::to_string); }
-        if let Some(attachments) = changes.attachments() {
-            event.attachments = attachments.to_vec();
-        }
+        if let Some(link) = changes.link() { event.link = link.map(str::to_string); }
         Some(event)
     }
 
@@ -279,6 +274,7 @@ impl<'a> Occurrence<'a> {
 }
 
 /// Postcard encodes variants by position: only append new variants, never insert or reorder.
+/// (They were reordered once, for `CoconutCalendarV3`, which started with no data.)
 #[derive(Debug, Clone, Hash, Serialize, Deserialize)]
 pub enum CalendarMessage {
     CreateEvent { id: EventId, event: Box<Event> },
@@ -287,11 +283,9 @@ pub enum CalendarMessage {
     SetTiming { id: EventId, timing: Timing },
     SetLocation { id: EventId, location: Option<String> },
     SetInfo { id: EventId, info: Option<String> },
-    SetVideoLink { id: EventId, link: Option<String> },
+    SetLink { id: EventId, link: Option<String> },
     SetCategory { id: EventId, category: Category },
     SetPrivate { id: EventId, private: bool },
-    AddAttachment { id: EventId, link: String },
-    RemoveAttachment { id: EventId, link: String },
     SetRecurrence { id: EventId, recurrence: Option<Recurrence> },
     CancelOccurrence { id: EventId, date: NaiveDate },
     ChangeOccurrence { id: EventId, date: NaiveDate, changes: Override },
@@ -335,8 +329,8 @@ impl Calendar {
         calendar.send(CalendarMessage::SetInfo { id, info });
     }
 
-    pub fn set_video_link(calendar: &mut Instance<Calendar>, id: EventId, link: Option<String>) {
-        calendar.send(CalendarMessage::SetVideoLink { id, link });
+    pub fn set_link(calendar: &mut Instance<Calendar>, id: EventId, link: Option<String>) {
+        calendar.send(CalendarMessage::SetLink { id, link });
     }
 
     pub fn set_category(calendar: &mut Instance<Calendar>, id: EventId, category: Category) {
@@ -345,14 +339,6 @@ impl Calendar {
 
     pub fn set_private(calendar: &mut Instance<Calendar>, id: EventId, private: bool) {
         calendar.send(CalendarMessage::SetPrivate { id, private });
-    }
-
-    pub fn add_attachment(calendar: &mut Instance<Calendar>, id: EventId, link: String) {
-        calendar.send(CalendarMessage::AddAttachment { id, link });
-    }
-
-    pub fn remove_attachment(calendar: &mut Instance<Calendar>, id: EventId, link: String) {
-        calendar.send(CalendarMessage::RemoveAttachment { id, link });
     }
 
     /// `None` stops the event repeating.
@@ -416,7 +402,7 @@ impl Contract for Calendar {
     type Message = CalendarMessage;
     type Result = ();
 
-    fn id() -> Id { Id::hash("CoconutCalendarV2") }
+    fn id() -> Id { Id::hash("CoconutCalendarV3") }
 
     fn init(_init: (), _metadata: Metadata) -> Self { Calendar::default() }
 
@@ -432,6 +418,7 @@ impl Contract for Calendar {
                 }
                 let event = Event {
                     attendees: vec![],
+                    link: event.link.as_deref().and_then(Event::optional),
                     recurrence,
                     time_proposals: vec![],
                     deleted: false,
@@ -474,9 +461,9 @@ impl Contract for Calendar {
                     event.info = info.as_deref().and_then(Event::optional);
                 }
             }
-            CalendarMessage::SetVideoLink { id, link } => {
+            CalendarMessage::SetLink { id, link } => {
                 if let Some(event) = self.editable(id) {
-                    event.video_link = link.as_deref().and_then(Event::optional);
+                    event.link = link.as_deref().and_then(Event::optional);
                 }
             }
             CalendarMessage::SetCategory { id, category } => {
@@ -484,18 +471,6 @@ impl Contract for Calendar {
             }
             CalendarMessage::SetPrivate { id, private } => {
                 if let Some(event) = self.editable(id) { event.private = private; }
-            }
-            CalendarMessage::AddAttachment { id, link } => {
-                if let Some(event) = self.editable(id)
-                    && let Some(link) = Event::optional(&link)
-                    && !event.attachments.contains(&link) {
-                    event.attachments.push(link);
-                }
-            }
-            CalendarMessage::RemoveAttachment { id, link } => {
-                if let Some(event) = self.editable(id) {
-                    event.attachments.retain(|attachment| *attachment != link);
-                }
             }
             CalendarMessage::SetRecurrence { id, recurrence } => {
                 let Some(event) = self.editable(id) else { return };

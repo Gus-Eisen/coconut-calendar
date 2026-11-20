@@ -18,8 +18,7 @@ pub struct Override {
     timing: Option<Timing>,
     location: Option<Option<String>>,
     info: Option<Option<String>>,
-    video_link: Option<Option<String>>,
-    attachments: Option<Vec<String>>,
+    link: Option<Option<String>>,
     responses: BTreeMap<Name, Response>,
 }
 
@@ -28,10 +27,7 @@ impl Override {
     pub fn timing(&self) -> Option<&Timing> { self.timing.as_ref() }
     pub fn location(&self) -> Option<Option<&str>> { self.location.as_ref().map(Option::as_deref) }
     pub fn info(&self) -> Option<Option<&str>> { self.info.as_ref().map(Option::as_deref) }
-    pub fn video_link(&self) -> Option<Option<&str>> {
-        self.video_link.as_ref().map(Option::as_deref)
-    }
-    pub fn attachments(&self) -> Option<&[String]> { self.attachments.as_deref() }
+    pub fn link(&self) -> Option<Option<&str>> { self.link.as_ref().map(Option::as_deref) }
 
     /// Nothing differs from the series.
     pub fn is_empty(&self) -> bool { *self == Override::default() }
@@ -55,12 +51,8 @@ impl Override {
         self.info = (info.as_deref() != series).then_some(info);
     }
 
-    pub fn set_video_link(&mut self, link: Option<String>, series: Option<&str>) {
-        self.video_link = (link.as_deref() != series).then_some(link);
-    }
-
-    pub fn set_attachments(&mut self, attachments: Vec<String>, series: &[String]) {
-        self.attachments = (attachments != series).then_some(attachments);
+    pub fn set_link(&mut self, link: Option<String>, series: Option<&str>) {
+        self.link = (link.as_deref() != series).then_some(link);
     }
 
     /// Trims the text fields as the series setters do. `None` if nothing is left to change, or
@@ -76,20 +68,12 @@ impl Override {
         if self.timing.is_some_and(|timing| !timing.is_valid()) || !self.responses.is_empty() {
             return None;
         }
-        let attachments = self.attachments.map(|links| {
-            let mut kept: Vec<String> = vec![];
-            for link in links.iter().filter_map(|link| Event::optional(link)) {
-                if !kept.contains(&link) { kept.push(link); }
-            }
-            kept
-        });
         let changes = Override {
             title,
             timing: self.timing,
             location: text(self.location),
             info: text(self.info),
-            video_link: text(self.video_link),
-            attachments,
+            link: text(self.link),
             responses: BTreeMap::new(),
         };
         (!changes.is_empty()).then_some(changes)
