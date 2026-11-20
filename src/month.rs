@@ -1,11 +1,9 @@
 use chk::{
     Action, Bumper, Context, Display, Flow, ListItem, Offset, Page, PageType, Root, Theme, Watch,
 };
-use ramp::prism::drawable::Color;
-use ramp::prism::drawable::text::{Align, Text};
 use chrono::{DateTime, Datelike, Months, NaiveDate, NaiveDateTime, Utc};
 use chrono_tz::Tz;
-use ramp::prism::air::Instance;
+use ramp::prism::{air::Instance, drawable::{Color, text::{Align, Text}}};
 
 use crate::{Calendar, Event, Occurrence, Timing};
 
