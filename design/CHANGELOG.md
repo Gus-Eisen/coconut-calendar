@@ -69,3 +69,13 @@ them into the next design version instead.
   action are gone from 07. (2026-11-20)
 - **12 Add link:** the Add link flow and the links list are removed; each link's
   Delete goes with them. (2026-11-20)
+- **18 Day view:** a Create Event bumper on today and future days (today in the
+  viewer's zone). On an empty such day it sits under "No events on this day."
+  A past day has no button. (2026-11-20)
+- **01, 19 Month:** every day row is tappable and shows a chevron, including
+  empty and past days (chk shows a chevron on any row with a flow). v1 only
+  opened days that have events. (2026-11-20)
+- **03, 04, 13, 14 forms:** from a Day view, Date / First Day is skipped and the
+  start is that day (year included). Regular is 7 steps, All-day 6, Repeating 11,
+  Repeating all-day 10. From the month the counts stay 8 / 7 / 12 / 11. The
+  Link step has Paste; Edit details does not. (2026-11-20)
