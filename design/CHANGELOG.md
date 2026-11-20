@@ -33,10 +33,10 @@ them into the next design version instead.
 
 - **07 Event detail:** gets a fifth action, Change privacy, opening 11's privacy radio.
   v1 shows only Edit details, Change time, Change category and Delete. (2026-11-16)
-- **03 Regular event form:** no End Date step. Steps are Event Title, Category, Date,
-  Start Time, End Time, Location, Info; an earlier End Time means the next day, an equal
-  one is an error. v1's note says "step 6 of 8"; it should be "step 5 of 7". The
-  Repeating form drops End Date too. (2026-11-16)
+- **03 Regular event form:** no End Date step. An earlier End Time means the next day, an equal
+  one is an error. v1's note says "step 6 of 8"; after dropping End Date it was "step 5 of 7".
+  A Link step was added later (2026-11-20, below). The Repeating form drops End Date too.
+  (2026-11-16)
 - **01 Month (home):** the spec's month row shows the start time only, not 01's
   start and end. (2026-11-16)
 - **01, 18, 19 Views:** the month row shows time and title only, with no
@@ -60,3 +60,12 @@ them into the next design version instead.
   "This can't be undone." The changed occurrence's action is "Restore", not "Restore to
   series", and its line is "This occurrence was changed." Plain short titles, as chk clips
   long ones. (2026-11-17)
+- **03, 04, 13, 14 forms:** all four new-event forms have an optional Link step after
+  Info (placeholder "Link (optional)"). Regular is 8 steps, All-day 7, Repeating 12,
+  Repeating all-day 11. The review shows a Link row when it's set. v1 has no Link step,
+  and 03's note should now read "step 5 of 8". (2026-11-20)
+- **07 Event detail and 08 Edit details:** the detail-page row and the Edit details
+  field are "Link", not 08's "Video link". The Attachments section and its Add link
+  action are gone from 07. (2026-11-20)
+- **12 Add link:** the Add link flow and the links list are removed; each link's
+  Delete goes with them. (2026-11-20)

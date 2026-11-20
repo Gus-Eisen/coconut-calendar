@@ -30,7 +30,7 @@ Screen numbers such as "see 21b" refer to `design/v1/screens/21b-*.png`.
 
 ## 1. Air Objects and Fields
 
-`Event` is a public struct with twelve private fields:
+`Event` is a public struct with eleven private fields:
 
 | Field              | Type             | Meaning                                                  | Example                       |
 |--------------------|------------------|----------------------------------------------------------|-------------------------------|
@@ -39,13 +39,14 @@ Screen numbers such as "see 21b" refer to `design/v1/screens/21b-*.png`.
 | `location`         | `Option<String>` | Where the event happens, trimmed. `None` if left blank.  | `Some("Room 4B")`             |
 | `info`             | `Option<String>` | Extra notes about the event, trimmed. `None` if left blank. | `Some("Bring the slides")` |
 | `attendees`        | `Vec<Attendee>`  | The users invited to the event, each with their response. Empty if there are none. | `vec![Attendee { name: alice, response: Response::Accepted }]` |
-| `video_link`       | `Option<String>` | A link to the event's video call, trimmed. `None` if left blank. | `Some("https://meet.example.com/abc-123")` |
-| `attachments`      | `Vec<String>`    | Links to files attached to the event. Empty if there are none. | `vec!["https://files.example.com/slides.pdf"]` |
+| `link`             | `Option<String>` | One optional link, for a video call or anything else, trimmed. `None` if left blank. | `Some("https://meet.example.com/abc-123")` |
 | `recurrence`       | `Option<Recurrence>` | How the event repeats, until when, and which occurrences were cancelled or changed. `None` if it happens once. | `Some(Recurrence { frequency: Frequency::Weekly { days: vec![Weekday::Mon] }, interval: 1, until: Some(2027-06-30), count: None, exceptions: {} })` |
 | `category`         | `Category`       | Whether it's a work or personal event. Shown as a text label (see `Category`). | `Category::Work` |
 | `time_proposals`   | `Vec<TimeProposal>` | New times that users have proposed and that are still waiting for everyone to agree. Empty if there are none. | `vec![TimeProposal { proposer: charlie, timing: Timing::Timed { .. }, approvals: {bob} }]` |
 | `private`          | `bool`           | `true` if only users with `Visibility::Private` can see the event (see section 3). Starts `false`. | `false` |
 | `deleted`          | `bool`           | `true` once the whole event has been deleted, including every occurrence if it repeats. Starts `false`. | `false` |
+
+One optional link replaces the video link and the attachments (Gus, 2026-11-20).
 
 ### Supporting types
 
@@ -234,8 +235,8 @@ form:
 
 | Form | Steps |
 |------|-------|
-| Repeating | Event Title, Category, Date, Start Time, End Time, Repeats, Every, Until, Times, Location, Info |
-| Repeating All-Day | Event Title, Category, First Day, Last Day, Repeats, Every, Until, Times, Location, Info |
+| Repeating | Event Title, Category, Date, Start Time, End Time, Repeats, Every, Until, Times, Location, Info, Link |
+| Repeating All-Day | Event Title, Category, First Day, Last Day, Repeats, Every, Until, Times, Location, Info, Link |
 
 - **Repeats** is one single-select radio list (UI: see 14, 14b), replacing the
   old Frequency and Repeat Days steps:
@@ -312,8 +313,7 @@ pub struct Override {
     timing: Option<Timing>,                  // e.g. moved from Monday to Tuesday
     location: Option<Option<String>>,        // Some(None) clears it for this occurrence
     info: Option<Option<String>>,
-    video_link: Option<Option<String>>,
-    attachments: Option<Vec<String>>,
+    link: Option<Option<String>>,
     responses: BTreeMap<Name, Response>,     // attendees' answers for this occurrence only
 }
 ```
@@ -373,8 +373,8 @@ occurrence is then one message to one instance, and can never get out of step
 with the series.
 
 **Which Events? (step 3b, decided 2026-11-17).** On a repeating event, Edit
-details (and the header edit icon), Change time, Add link, a link's Delete and
-Delete first open a one-step radio titled **Which Events?**:
+details (and the header edit icon), Change time and Delete first open a
+one-step radio titled **Which Events?**:
 
 | Choice | Subtitle | What happens |
 | -------- | -------- | -------------- |
@@ -385,7 +385,7 @@ Delete first open a one-step radio titled **Which Events?**:
   option).
 - The step comes *before* the edit flow, because each edit is its own flow and
   a bumper holds only two buttons. Its submit opens the chosen flow, or acts
-  right away (Delete > Whole series, a link's Delete) (UI: see 16).
+  right away (Delete > Whole series) (UI: see 16).
 - Events that don't repeat skip the step. Change category, Change privacy and
   Change repeat always change the series, with no step.
 - "This and following events" (`split_series`) comes later; see section 6.
@@ -428,8 +428,7 @@ Getters for every field except `deleted`:
 | `location` | `fn location(&self) -> Option<&str>` | Returns the location, if there is one. |
 | `info` | `fn info(&self) -> Option<&str>` | Returns the notes, if there are any. |
 | `attendees` | `fn attendees(&self) -> &[Attendee]` | Returns the attendees. |
-| `video_link` | `fn video_link(&self) -> Option<&str>` | Returns the video call link, if there is one. |
-| `attachments` | `fn attachments(&self) -> &[String]` | Returns the attachment links. |
+| `link` | `fn link(&self) -> Option<&str>` | Returns the link, if there is one. |
 | `recurrence` | `fn recurrence(&self) -> Option<&Recurrence>` | Returns how the event repeats, if it does. |
 | `category` | `fn category(&self) -> Category` | Returns work or personal. |
 | `time_proposals` | `fn time_proposals(&self) -> &[TimeProposal]` | Returns the open time proposals. |
@@ -446,7 +445,7 @@ Helpers for the new-event forms:
 | `date` | `fn date(input: &str) -> Option<NaiveDate>` | Reads a `DD-MM` date as the first such date on or after today: `date_from(input, today)`. Used for every first date (Date, First Day). `None` if the input isn't a valid date. |
 | `date_from` | `fn date_from(input: &str, earliest: NaiveDate) -> Option<NaiveDate>` | Reads a `DD-MM` date as the first such date on or after `earliest`: it tries `earliest`'s year, then the next year. `None` if neither gives a valid date on or after `earliest` (e.g. `29-02` when the next 29 February is more than a year away). |
 | `time` | `fn time(input: &str) -> Option<NaiveTime>` | Reads an `HH:MM` time (24-hour). `None` if invalid. |
-| `from_states` | `fn from_states(states: &[State]) -> Event` | Builds an `Event` from either new-event form's inputs, reading the timing steps with `Timing::from_states` in the device's time zone. Sets `deleted: false`. The form checks the inputs first, so this panics if they're invalid. It only ever reads form inputs, never AIR data. |
+| `from_states` | `fn from_states(states: &[State]) -> Event` | Builds an `Event` from any new-event form's inputs, reading the timing steps with `Timing::from_states` in the device's time zone. All four forms end with Location, Info and Link; those are stored with `optional`. Sets `deleted: false`. The form checks the inputs first, so this panics if they're invalid. It only ever reads form inputs, never AIR data. |
 | `optional` | `fn optional(input: &str) -> Option<String>` | Trims a text. Returns `None` if it's empty. The forms and `apply` both use it, so they share one rule. |
 
 Helpers for occurrences (`date` is always an occurrence's original date). They
@@ -463,12 +462,13 @@ one:
 | `dropped` | `fn dropped(&self, timing: &Timing, recurrence: Option<&Recurrence>) -> usize` | How many exceptions `apply` would drop if the series became `timing` with `recurrence` (`None`: all of them). For the reviews' warning line. |
 | `dropped_by_timing` | `fn dropped_by_timing(&self, timing: &Timing) -> usize` | `dropped` for a whole-series Change time, whose rule follows the new start as in `SetTiming`. |
 
-`Override` has getters `title`, `timing`, `location`, `info`, `video_link`
-and `attachments`, `is_empty` (nothing differs), and one setter per field that
-also takes the series' value and stores `None` when they're equal (e.g.
-`set_title`, `set_timing`). `location`, `info` and `video_link` return
+`Override` has getters `title`, `timing`, `location`, `info` and `link`,
+`is_empty` (nothing differs), and one setter per field that also takes the
+series' value and stores `None` when they're equal (e.g. `set_title`,
+`set_timing`, `set_link`). `location`, `info` and `link` return
 `Option<Option<&str>>`: `None` means "same as the series", and `Some(None)`
-means "cleared".
+means "cleared". `normalised` trims those optional text fields with
+`Event::optional`.
 `Recurrence` has `exceptions()` and `rule()` (a copy without exceptions, to
 compare with a rule a form built).
 
@@ -509,8 +509,8 @@ its own form, one field per page (UI: see 03 and 04):
 
 | Form | Steps |
 |------|-------|
-| Regular (timed) | Event Title, Category, Date, Start Time, End Time, Location, Info |
-| All-day | Event Title, Category, First Day, Last Day, Location, Info |
+| Regular (timed) | Event Title, Category, Date, Start Time, End Time, Location, Info, Link |
+| All-day | Event Title, Category, First Day, Last Day, Location, Info, Link |
 
 - Dates are `DD-MM` (`Event::date`), and times are `HH:MM` (`Event::time`).
 - The new-event forms have no End Date step (Gus, 2026-11-16). The end date
@@ -539,9 +539,10 @@ its own form, one field per page (UI: see 03 and 04):
 - The review shows the full end date and time, so a wrong overnight guess is
   caught before saving.
 - The review shows Title, Category, the timing (Start, End and Time zone, or
-  First day and Last day), and Location and Info if they're filled in. All-day
-  events have no time-zone row, because their dates are the same everywhere
-  (UI: see 05).
+  First day and Last day), and Location, Info and Link if they're filled in.
+  All-day events have no time-zone row, because their dates are the same
+  everywhere (UI: see 05). The Link step's placeholder is "Link (optional)";
+  it is always valid, and a blank value is stored as `None`.
 - The success message names the start date and time, or the first day (and
   the last day if it's different). Done returns to the month screen (UI: see
   06).
@@ -638,25 +639,32 @@ never arrived, and AIR's pending state has no way to report that. When
 | `set_timing` | `fn set_timing(calendar: &mut Instance<Calendar>, id: EventId, timing: Timing)` | `Time` |
 | `set_info` | `fn set_info(calendar: &mut Instance<Calendar>, id: EventId, info: Option<String>)` | `Info` |
 | `set_location` | `fn set_location(calendar: &mut Instance<Calendar>, id: EventId, location: Option<String>)` | `Location` |
+| `set_link` | `fn set_link(calendar: &mut Instance<Calendar>, id: EventId, link: Option<String>)` | `Link` |
 | `set_recurrence` | `fn set_recurrence(calendar: &mut Instance<Calendar>, id: EventId, recurrence: Option<Recurrence>)` | `Recurrence` |
 | `add_attendee` | `fn add_attendee(calendar: &mut Instance<Calendar>, id: EventId, name: Name)` | `Attendee` |
 | `remove_attendee` | `fn remove_attendee(calendar: &mut Instance<Calendar>, id: EventId, name: Name)` | `Attendee` |
-| `set_video_link` | `fn set_video_link(calendar: &mut Instance<Calendar>, id: EventId, link: Option<String>)` | `VideoLink` |
-| `add_attachment` | `fn add_attachment(calendar: &mut Instance<Calendar>, id: EventId, link: String)` | `Attachment` |
-| `remove_attachment` | `fn remove_attachment(calendar: &mut Instance<Calendar>, id: EventId, link: String)` | `Attachment` |
 | `set_category` | `fn set_category(calendar: &mut Instance<Calendar>, id: EventId, category: Category)` | `Category` |
 | `set_private` | `fn set_private(calendar: &mut Instance<Calendar>, id: EventId, private: bool)` | `Privacy` |
 
 `set_timing` also cancels every open time proposal on the event.
 
-`set_recurrence` sends `CalendarMessage::SetRecurrence { id, recurrence }`,
-appended after `RemoveAttachment` in step 3a. `None` stops the event
-repeating.
+`set_recurrence` sends `CalendarMessage::SetRecurrence { id, recurrence }`.
+`None` stops the event repeating. `set_link` sends
+`CalendarMessage::SetLink { id, link }`.
 
-Step 3b appended `CancelOccurrence`, `ChangeOccurrence` and
-`RestoreOccurrence`, in that order, after `SetRecurrence`. `Exception` and
-`Override` didn't change, so the contract id stays `CoconutCalendarV2`
-(checked by encoding with the 3a types and decoding with the 3b ones).
+`Calendar::id` is `Id::hash("CoconutCalendarV3")`. Postcard stores enum
+variants by position, so new variants are only appended. The V3 enum was
+reordered once (the contract started with no data, so there was nothing
+to misread) and is append-only from here. The current order is:
+`CreateEvent`, `DeleteEvent`, `SetTitle`, `SetTiming`, `SetLocation`,
+`SetInfo`, `SetLink`, `SetCategory`, `SetPrivate`, `SetRecurrence`,
+`CancelOccurrence`, `ChangeOccurrence`, `RestoreOccurrence`.
+
+(History: step 3a appended `SetRecurrence` after `RemoveAttachment`, and
+step 3b appended the three occurrence messages after that, keeping the id
+`CoconutCalendarV2`. Step 4b, 2026-11-20, replaced `SetVideoLink`,
+`AddAttachment` and `RemoveAttachment` with `SetLink` after `SetInfo` and
+bumped the id to V3, which started with no data.)
 
 **Checking a recurrence.** `Recurrence::is_valid(&self, timing: &Timing) ->
 bool` is the one rule the forms and `apply` share. A recurrence is valid when:
@@ -672,7 +680,8 @@ bool` is the one rule the forms and `apply` share. A recurrence is valid when:
 In `apply`:
 
 - `CreateEvent` keeps a valid recurrence. An invalid one, or one with
-  exceptions, makes it ignore the whole event.
+  exceptions, makes it ignore the whole event. It also trims `link` with
+  `Event::optional`, so a blank or whitespace link is stored as `None`.
 - `SetRecurrence` ignores the incoming exceptions and keeps the event's own,
   since only their own messages change them. It ignores the message if the
   result isn't valid. Otherwise it drops the exceptions whose original date
@@ -693,16 +702,15 @@ In `apply`:
 - `ChangeOccurrence` is also ignored if the occurrence is cancelled, `title`
   is set but blank, `timing` is set but not valid, `responses` isn't empty
   (until step 6), or nothing is left to change after cleaning. Cleaning trims
-  the text fields with `Event::optional` (a blank one becomes `Some(None)`,
-  "cleared"), and trims the attachment links, drops blank ones and removes
-  duplicates, keeping their order.
+  the text fields (`location`, `info` and `link`) with `Event::optional` (a
+  blank one becomes `Some(None)`, "cleared").
 - `RestoreOccurrence` removes a `Changed` exception and does nothing on
   `Cancelled`. `CreateEvent` still rejects a recurrence with exceptions.
 
 **Editing screens (step 2).** Tapping an event in the day view opens its
 **event detail** page (UI: see 07): a table of Time, Category, Location, Info,
-Private and Video link, the attachment links, and the actions Edit details,
-Change time, Change category, Change privacy and Delete. Since step 3a, a
+Link (when set) and Private, and the actions Edit details, Change time, Change
+category, Change privacy and Delete. Since step 3a, a
 repeating event adds Repeats, On, First and Ends rows after Time, and there's a
 Change repeat action. Since step 3b, the page shows the tapped occurrence's own
 values (its title, time, location and so on), and on a repeating event the
@@ -714,11 +722,10 @@ split:
 
 | Screen | What it changes | How |
 |--------|-----------------|-----|
-| Edit details (UI: see 08) | Title, Location, Info, Video link | One page (`Form::page` / `PageType::edit_and_display`) with a `FormItem::text_with_preset` for each field, filled with the current values. Save stays off until something changes and every field is valid. Calls the setter for each changed field. |
+| Edit details (UI: see 08) | Title, Location, Info, Link | One page (`Form::page` / `PageType::edit_and_display`) with a `FormItem::text_with_preset` for each field, filled with the current values. Save stays off until something changes and every field is valid. A blank Link is stored as `None`. Calls the setter for each changed field. On a repeating event, the existing Which Events? step covers the link like the other text fields. |
 | Change time (UI: see 09) | `timing` | A flow: Date, Start Time, End Date, End Time, then a review showing the current and new times. Step titles are plain ("Start Time", "End Time"): chk clips longer ones. Date is on or after today; End Date uses the same rule as Last Day (on or after the start, at most 28 days later). Times are typed and shown in the event's own time zone (the `time_zone` in its `Timing`), and the review names it. An all-day event changed to timed uses the device's zone. Calls `set_timing`, unless the timing is unchanged. For one occurrence (3b), Current is the occurrence's own time, there's no Until limit, and it calls `change_occurrence`. |
 | Change to all-day or timed (UI: see 10) | `timing` | A picker like the event-type picker (Timed / All-day, with the current timing in the first option's subtitle), then the matching timing flow. |
 | Change category or privacy (UI: see 11) | `category`, `private` | A one-step radio page: Personal / Work, or Not private / Private. The radio always starts on its first option, so the current value is shown as that option's subtitle. Calls `set_category` or `set_private`. |
-| Add attachment link (UI: see 12) | `attachments` | A text step with a Paste action. Calls `add_attachment`. Each link on the detail page has a Delete action (`remove_attachment`). No file upload. For one occurrence (3b), its list is its own if it has one, else the series'; adding or deleting sets the whole list with `change_occurrence`. Delete > Whole series removes the link from the series and, if the tapped occurrence has its own list, from that list too (restoring the occurrence if nothing else differs). Other occurrences' own lists keep it. |
 | Change repeat (UI: see 15) | `recurrence` | See `Recurrence`. |
 
 Delete on an event that doesn't repeat, and Delete > Whole series, have no
@@ -903,8 +910,7 @@ pub enum Action {
     Location,
     Recurrence,
     Attendee,
-    VideoLink,
-    Attachment,
+    Link,
     ProposeTime,
     Privacy,
     Category,
@@ -921,8 +927,7 @@ pub enum Action {
 | `Location` | ✅ | ❌ |
 | `Recurrence` | ✅ | ❌ |
 | `Attendee` | ✅ | ❌ |
-| `VideoLink` | ✅ | ❌ |
-| `Attachment` | ✅ | ❌ |
+| `Link` | ✅ | ❌ |
 | `ProposeTime` | ✅ | ✅ |
 | `Privacy` | ✅ | ❌ |
 | `Category` | ✅ | ❌ |
@@ -937,8 +942,7 @@ pub enum Action {
 | `Location` | `location` |
 | `Recurrence` | `recurrence`'s `frequency` and `until` |
 | `Attendee` | `attendees` (adding and removing attendees) |
-| `VideoLink` | `video_link` |
-| `Attachment` | `attachments` (adding and removing links) |
+| `Link` | `link` |
 | `ProposeTime` | `time_proposals` (adding a proposal) |
 | `Privacy` | `private` (moves the event between the "Events" and "Private events" instances) |
 | `Category` | `category` |
@@ -1011,9 +1015,12 @@ chk's `ListItem` right-hand text is one line, about 153 pt wide on an iPhone
 17, with no ellipsis, so longer values are cut off with nothing to say they
 were. A continuation label such as "23:00 (15 Nov) Night shift" may show as
 "23:00 (15 No", and a Day-view time such as "23:00 (15 Nov)–01:00" may show as
-"23:00 (". Keeping the month list's scroll position across a rebuild needs an
-upstream chk change: `Listener::on_change` should carry over the `Scrollable`
-offset, as it already does for a `MessagesPage` input. Both are with chk's developer.
+"23:00 (". A one-line `fit()` title on the left of a `ListItem` can be cut to
+its first letter: the Day-view title "Rep link" has been drawn as "R".
+Keeping the month list's scroll position across a rebuild needs an upstream
+chk change: `Listener::on_change` should carry over the `Scrollable` offset,
+as it already does for a `MessagesPage` input. There is no known way to open
+a link from chk yet. These are with chk's developer.
 
 ### Order of work
 
@@ -1025,7 +1032,7 @@ change *where* events are sent, not what an `Event` is.
    their getters, the event-type picker and the new-event forms (UI: see
    01–06).
 2. Editing methods and their `CalendarMessage` variants, and the event detail
-   and editing screens (UI: see 07–12).
+   and editing screens (UI: see 07–11).
 3. a. Repeating events: `Recurrence`, working out occurrences in
    `Calendar::on`, the skipped-date and daylight-saving rules, and the
    Repeating option and form (UI: see 13–15).
@@ -1035,7 +1042,9 @@ change *where* events are sent, not what an `Event` is.
    `SplitSeries` ("This and following") moves later; `DetachOccurrence` moves
    to step 6 (invites).
 4. Views (done, 2026-11-20): day and month, including the month summary for
-   days with several events (UI: see 18, 19).
+   days with several events (UI: see 18, 19). One optional link (done,
+   2026-11-20): `link` replaces the video link and the attachments; the
+   contract id is `CoconutCalendarV3`.
 5. Attribution and roles, and the People tab (UI: see 20–23).
 6. Invites and time proposals, and the Invites tab. A test of
    `Instance::share` between two identities comes first (UI: see 24–29).
@@ -1080,6 +1089,9 @@ doesn't decide yet. The open questions in sections 2 and 4 still stand.
   details (UI: see 08) sends one message per changed field, comparing after
   trimming, so an unchanged field sends nothing.
 - **Changing privacy.** Decided: 07 gets a Change privacy action that opens screen 11's privacy radio. The Figma mockup of 07 still needs the button added.
+- **One link.** Decided 2026-11-20 (Gus): one optional `link` replaces the
+  video link and the attachments. The new-event forms have a Link step after
+  Info; Edit details edits it; clearing it means saving it blank.
 
 **Repeating events and exceptions**
 
