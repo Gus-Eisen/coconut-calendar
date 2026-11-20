@@ -421,7 +421,10 @@ impl Contract for Calendar {
                     return;
                 }
                 let event = Event {
+                    title: event.title.trim().to_string(),
                     attendees: vec![],
+                    location: event.location.as_deref().and_then(Event::optional),
+                    info: event.info.as_deref().and_then(Event::optional),
                     link: event.link.as_deref().and_then(Event::optional),
                     recurrence,
                     time_proposals: vec![],

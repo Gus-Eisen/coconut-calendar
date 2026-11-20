@@ -13,7 +13,6 @@ use crate::{Calendar, Event, EventId, Recurrence, Repeat, Timing};
 
 use super::EventScreen;
 use super::detail::Scope;
-use super::new_event::EventKind;
 
 /// Change time: a Timed / All-day picker, then that kind's steps and a Current / New review.
 /// Timed steps use the event's own time zone, so an event set in Tokyo stays in Tokyo time.
@@ -32,67 +31,45 @@ impl ChangeTime {
         let series_now = series.clone();
         let submit = Box::new(move |_ctx: &mut Context, states: &Vec<State>| {
             let [State::Enumerator(index)] = states.as_slice() else { unreachable!() };
-            let (kind, calendar, series) =
-                (EventKind::options()[*index], calendar.clone(), series_now.clone());
+            let (index, calendar, series) = (*index, calendar.clone(), series_now.clone());
             FormComplete::Return(Box::new(move |ctx: &mut Context, theme: &Theme| {
                 let times = FormTimes { latest, ..FormTimes::default() };
                 let times = Rc::new(RefCell::new(times));
                 let edit = Edit {
                     calendar: calendar.clone(), id, series: series.clone(), scope, current,
                 };
-                let form = match kind {
-                    EventKind::AllDay => Self::all_day(theme, edit, times),
-                    _ => Self::timed(theme, edit, times),
+                // Timed steps use the event's own zone; an all-day event has none, so it becomes
+                // timed in the device's. The step titles don't name the zone (chk cuts long
+                // titles short); the review does.
+                let (zone, steps) = match index {
+                    0 => {
+                        let zone = match current {
+                            Timing::Timed { time_zone, .. } => time_zone,
+                            Timing::AllDay { .. } => Timing::device_zone(),
+                        };
+                        let steps = vec![
+                            FormTimes::date_step("Date", times.clone()),
+                            FormTimes::start_step("Start Time", times.clone()),
+                            FormTimes::end_date_step("End Date", times.clone()),
+                            FormTimes::end_time_step(times, zone),
+                        ];
+                        (zone, steps)
+                    }
+                    _ => {
+                        let steps = vec![
+                            FormTimes::date_step("First Day", times.clone()),
+                            FormTimes::end_date_step("Last Day", times),
+                        ];
+                        (Timing::device_zone(), steps)
+                    }
                 };
-                Flow::from_form(form).build(ctx, theme)(ctx, theme)
+                Flow::from_form(Self::flow(theme, edit, zone, steps)).build(ctx, theme)(ctx, theme)
             }))
         }) as Box<dyn FormSubmit>;
 
         let now = format!("Now: {}", EventScreen::when(&current, Timing::device_zone()));
         let kinds = vec![("Timed", now.as_str()), ("All-day", "Whole days, no times")];
         Form::flow(theme, vec![FormItem::enumerator("Timing", kinds)], None, None, submit)
-    }
-
-    /// An all-day event has no zone of its own, so it becomes timed in the device's zone. The
-    /// step titles don't name the zone (chk cuts long titles short); the review does.
-    fn timed(theme: &Theme, edit: Edit, times: Rc<RefCell<FormTimes>>) -> Form {
-        let zone = match edit.current {
-            Timing::Timed { time_zone, .. } => time_zone,
-            Timing::AllDay { .. } => Timing::device_zone(),
-        };
-        let end_times = times.clone();
-
-        let end_time = FormItem::number(
-            "End Time",
-            NumberVariant::Time,
-            move |_ctx: &mut Context, input: String| {
-                let times = end_times.borrow();
-                let checked = Event::time(&input).ok_or("Not a valid time.").and_then(|end| {
-                    let (Some(date), Some(start), Some(end_date)) =
-                        (times.date, times.start, times.end_date) else { return Ok(()) };
-                    let timing = Timing::Timed {
-                        start: date.and_time(start), end: end_date.and_time(end), time_zone: zone,
-                    };
-                    if timing.is_valid() { Ok(()) } else { Err("Must be after the start.") }
-                });
-                FormTimes::validity(&input, checked)
-            },
-        );
-        let steps = vec![
-            FormTimes::date_step("Date", times.clone()),
-            FormTimes::start_step("Start Time", times.clone()),
-            FormTimes::end_date_step("End Date", times),
-            end_time,
-        ];
-        Self::flow(theme, edit, zone, steps)
-    }
-
-    fn all_day(theme: &Theme, edit: Edit, times: Rc<RefCell<FormTimes>>) -> Form {
-        let steps = vec![
-            FormTimes::date_step("First Day", times.clone()),
-            FormTimes::end_date_step("Last Day", times),
-        ];
-        Self::flow(theme, edit, Timing::device_zone(), steps)
     }
 
     /// Continue sends `set_timing` (whole series) or `change_occurrence` (one occurrence)
@@ -126,9 +103,10 @@ impl ChangeTime {
         Form::flow(theme, steps, Some(Review::new("Change Time Review", review)), None, submit)
     }
 
-    /// A timed table names the zone its times are in; all-day dates are the same everywhere.
-    fn table(label: &str, timing: &Timing) -> Display {
-        let rows = match *timing {
+    /// How a timing reads in a review. Timed rows name the zone their times are in; all-day
+    /// dates are the same everywhere.
+    pub fn rows(timing: &Timing) -> Vec<(&'static str, String)> {
+        match *timing {
             Timing::AllDay { first_day, last_day } => vec![
                 ("First day", first_day.format("%-d %b %Y").to_string()),
                 ("Last day", last_day.format("%-d %b %Y").to_string()),
@@ -142,8 +120,12 @@ impl ChangeTime {
                     ("Time zone", time_zone.name().to_string()),
                 ]
             }
-        };
-        let rows = rows.into_iter().map(|(label, value)| TableItem::new(label, &value)).collect();
+        }
+    }
+
+    fn table(label: &str, timing: &Timing) -> Display {
+        let rows = Self::rows(timing).into_iter()
+            .map(|(label, value)| TableItem::new(label, &value)).collect();
         Display::table(label, rows, None)
     }
 }
@@ -239,9 +221,6 @@ impl FormTimes {
         FormTimes { date, ..FormTimes::default() }
     }
 
-    pub fn date(&self) -> Option<NaiveDate> { self.date }
-    pub fn start(&self) -> Option<NaiveTime> { self.start }
-
     /// Date or First Day: on or after today, and not after `latest`.
     pub fn date_step(title: &str, times: Rc<RefCell<FormTimes>>) -> FormItem {
         FormItem::number(title, NumberVariant::Date, move |_ctx: &mut Context, input: String| {
@@ -333,6 +312,29 @@ impl FormTimes {
                 Some((_, end)) => Ok(end),
             };
             times.end_date = checked.ok();
+            Self::validity(&input, checked)
+        })
+    }
+
+    /// End Time: after the start in `zone`. With an End Date step it ends on that date;
+    /// without one (the new-event forms) an earlier end means the next day.
+    pub fn end_time_step(times: Rc<RefCell<FormTimes>>, zone: Tz) -> FormItem {
+        FormItem::number("End Time", NumberVariant::Time, move |_ctx: &mut Context, input: String| {
+            let times = times.borrow();
+            let checked = Event::time(&input).ok_or("Not a valid time.").and_then(|end| {
+                let timing = match (times.date, times.start, times.end_date) {
+                    (Some(date), Some(start), Some(end_date)) => Some(Timing::Timed {
+                        start: date.and_time(start), end: end_date.and_time(end), time_zone: zone,
+                    }),
+                    (Some(date), Some(start), None) => Timing::from_times(date, start, end, zone),
+                    _ => return Ok(()),
+                };
+                match timing {
+                    None => Err("Must be different from the start."),
+                    Some(timing) if timing.is_valid() => Ok(()),
+                    Some(_) => Err("Must be after the start."),
+                }
+            });
             Self::validity(&input, checked)
         })
     }

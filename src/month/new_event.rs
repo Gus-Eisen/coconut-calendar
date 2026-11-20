@@ -1,6 +1,6 @@
 use chk::{
     Context, Display, Flow, Form, FormAction, FormComplete, FormItem, FormSubmit, FormValidState,
-    Icons, NumberVariant, Review, State, Success, TableItem, Theme,
+    Icons, Review, State, Success, TableItem, Theme,
 };
 use chrono::NaiveDate;
 use ramp::prism::air::Instance;
@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use crate::{Calendar, Category, Event, Timing};
 
-use super::schedule::{ChangeRepeat, FormTimes};
+use super::schedule::{ChangeRepeat, ChangeTime, FormTimes};
 
 pub struct NewEvent;
 impl NewEvent {
@@ -23,14 +23,7 @@ impl NewEvent {
             let [State::Enumerator(index)] = states.as_slice() else { unreachable!() };
             let (kind, calendar) = (EventKind::options()[*index], calendar.clone());
             FormComplete::Return(Box::new(move |ctx: &mut Context, theme: &Theme| {
-                let form = match kind {
-                    EventKind::Regular => Self::form(theme, calendar.clone(), false, day),
-                    EventKind::AllDay => Self::all_day_form(theme, calendar.clone(), false, day),
-                    EventKind::Repeating => Self::form(theme, calendar.clone(), true, day),
-                    EventKind::RepeatingAllDay => {
-                        Self::all_day_form(theme, calendar.clone(), true, day)
-                    }
-                };
+                let form = Self::form(theme, calendar.clone(), kind, day);
                 Flow::from_form(form).build(ctx, theme)(ctx, theme)
             }))
         }) as Box<dyn FormSubmit>;
@@ -39,137 +32,61 @@ impl NewEvent {
         Form::flow(theme, vec![FormItem::enumerator("Event Type", kinds)], None, None, submit)
     }
 
-    /// The Regular form, or with `repeating` the Repeating form: the same steps plus Repeats,
-    /// Every, Until and Times after End Time. With `day`, there's no Date step.
-    pub fn form(
-        theme: &Theme, calendar: Instance<Calendar>, repeating: bool, day: Option<NaiveDate>,
-    ) -> Form {
-        let review = move |states: &Vec<State>| {
-            let event = Event::from_states(states, day);
-            let Timing::Timed { time_zone, .. } = *event.timing() else { unreachable!() };
-            // End Time's validator checked `is_valid`, so `in_zone` can't panic.
-            let (start, end) = event.timing().in_zone(time_zone).unwrap();
-            Self::review(&event, vec![
-                ("Start", start.format("%-d %b %Y, %H:%M").to_string()),
-                ("End", end.format("%-d %b %Y, %H:%M").to_string()),
-                ("Time zone", time_zone.name().to_string()),
-            ])
-        };
+    /// One kind's form: Start Time and End Time, or Last Day for an all-day kind, after Date /
+    /// First Day; a repeating kind adds Repeats, Every, Until and Times. With `day`, there's no
+    /// Date / First Day step.
+    fn form(theme: &Theme, calendar: Instance<Calendar>, kind: EventKind, day: Option<NaiveDate>) -> Form {
+        let review = move |states: &Vec<State>| Self::review(&Event::from_states(states, day));
 
         let success = move |states: Vec<State>| {
             let event = Event::from_states(&states, day);
-            let Timing::Timed { time_zone, .. } = *event.timing() else { unreachable!() };
-            // End Time's validator checked `is_valid`, so `in_zone` can't panic.
-            let (start, _) = event.timing().in_zone(time_zone).unwrap();
-            let time = start.format("%H:%M");
-            let message = match Self::first(&event) {
-                Some(first) => {
-                    format!("Repeating event saved, from {} at {time}", first.format("%-d %b %Y"))
+            // A weekly set that skips the start's weekday starts later than Date.
+            let start = event.timing().start_date();
+            let first = event.recurrence().and_then(|rule| rule.first(start));
+            let date = |date: NaiveDate| date.format("%-d %b %Y").to_string();
+            let message = match (*event.timing(), first) {
+                (Timing::AllDay { .. }, Some(first)) => {
+                    format!("Repeating all-day event saved, from {}", date(first))
                 }
-                None => format!("Event saved for {} at {time}", start.format("%-d %b %Y")),
-            };
-            (Icons::Checkmark, message)
-        };
-
-        let times = Rc::new(RefCell::new(FormTimes::starting(day)));
-        let end_times = times.clone();
-
-        let mut timing = vec![
-            FormTimes::start_step("Start Time", times.clone()),
-            FormItem::number(
-                "End Time",
-                NumberVariant::Time,
-                move |_ctx: &mut Context, time: String| {
-                    let times = end_times.borrow();
-                    let timing = match (times.date(), times.start(), Event::time(&time)) {
-                        _ if time.is_empty() => return FormValidState::Invalid,
-                        (_, _, None) => {
-                            return FormValidState::InvalidWithData("Not a valid time.".into());
+                (Timing::AllDay { first_day, last_day }, None) if first_day == last_day => {
+                    format!("All-day event saved for {}", date(first_day))
+                }
+                (Timing::AllDay { first_day, last_day }, None) => {
+                    format!("All-day event saved for {} to {}", date(first_day), date(last_day))
+                }
+                (Timing::Timed { time_zone, .. }, first) => {
+                    // End Time's validator checked `is_valid`, so `in_zone` can't panic.
+                    let (start, _) = event.timing().in_zone(time_zone).unwrap();
+                    let time = start.format("%H:%M");
+                    match first {
+                        Some(first) => {
+                            format!("Repeating event saved, from {} at {time}", date(first))
                         }
-                        (Some(date), Some(start), Some(end)) => {
-                            Timing::from_times(date, start, end, Timing::device_zone())
-                        }
-                        _ => return FormValidState::Valid,
-                    };
-                    match timing {
-                        None => FormValidState::InvalidWithData(
-                            "Must be different from the start.".into(),
-                        ),
-                        Some(timing) if timing.is_valid() => FormValidState::Valid,
-                        Some(_) => {
-                            FormValidState::InvalidWithData("Must be after the start.".into())
-                        }
+                        None => format!("Event saved for {} at {time}", date(start.date())),
                     }
-                },
-            ),
-        ];
-        if day.is_none() { timing.insert(0, FormTimes::date_step("Date", times.clone())); }
-        if repeating { timing.extend(FormTimes::repeat_steps(times, false)); }
-
-        Self::flow(
-            theme,
-            calendar,
-            day,
-            timing,
-            Review::new("New Event Review", review),
-            Success::new("New Event", success),
-        )
-    }
-
-    /// The All-day form, or with `repeating` the Repeating all-day form. With `day`, there's
-    /// no First Day step.
-    pub fn all_day_form(
-        theme: &Theme, calendar: Instance<Calendar>, repeating: bool, day: Option<NaiveDate>,
-    ) -> Form {
-        let review = move |states: &Vec<State>| {
-            let event = Event::from_states(states, day);
-            let Timing::AllDay { first_day, last_day } = *event.timing() else { unreachable!() };
-            Self::review(&event, vec![
-                ("First day", first_day.format("%-d %b %Y").to_string()),
-                ("Last day", last_day.format("%-d %b %Y").to_string()),
-            ])
-        };
-
-        let success = move |states: Vec<State>| {
-            let event = Event::from_states(&states, day);
-            let Timing::AllDay { first_day, last_day } = *event.timing() else { unreachable!() };
-            let days = if first_day == last_day {
-                first_day.format("%-d %b %Y").to_string()
-            } else {
-                format!("{} to {}", first_day.format("%-d %b %Y"), last_day.format("%-d %b %Y"))
-            };
-            let message = match Self::first(&event) {
-                Some(first) => {
-                    format!("Repeating all-day event saved, from {}", first.format("%-d %b %Y"))
                 }
-                None => format!("All-day event saved for {days}"),
             };
             (Icons::Checkmark, message)
         };
 
         let times = Rc::new(RefCell::new(FormTimes::starting(day)));
-        let mut timing = vec![FormTimes::end_date_step("Last Day", times.clone())];
-        if day.is_none() { timing.insert(0, FormTimes::date_step("First Day", times.clone())); }
-        if repeating { timing.extend(FormTimes::repeat_steps(times, false)); }
+        let (date_title, mut timing) = match kind.all_day() {
+            true => ("First Day", vec![FormTimes::end_date_step("Last Day", times.clone())]),
+            false => ("Date", vec![
+                FormTimes::start_step("Start Time", times.clone()),
+                FormTimes::end_time_step(times.clone(), Timing::device_zone()),
+            ]),
+        };
+        if day.is_none() { timing.insert(0, FormTimes::date_step(date_title, times.clone())); }
+        if kind.repeating() { timing.extend(FormTimes::repeat_steps(times, false)); }
 
         // chk cuts long titles short, so every new-event review has the same short title.
-        Self::flow(
-            theme,
-            calendar,
-            day,
-            timing,
-            Review::new("New Event Review", review),
-            Success::new("New All-Day Event", success),
-        )
+        let title = if kind.all_day() { "New All-Day Event" } else { "New Event" };
+        let review = Review::new("New Event Review", review);
+        Self::flow(theme, calendar, day, timing, review, Success::new(title, success))
     }
 
-    /// A repeating event's first occurrence date, or `None` if it doesn't repeat or no date
-    /// matches. A weekly set that skips the start's weekday starts later than Date.
-    fn first(event: &Event) -> Option<NaiveDate> {
-        event.recurrence()?.first(event.timing().start_date())
-    }
-
-    /// Puts the steps both forms share around `timing`, so `Event::from_states` can read either.
+    /// Puts the steps every kind shares around `timing`, so `Event::from_states` can read either.
     fn flow(
         theme: &Theme, mut calendar: Instance<Calendar>, day: Option<NaiveDate>,
         timing: Vec<FormItem>, review: Review, success: Success,
@@ -181,15 +98,10 @@ impl NewEvent {
 
         let start = vec![
             FormItem::text(
-                "Event Title",
-                "Event title",
-                None,
-                |_ctx: &mut Context, title: String| {
-                    if title.trim().is_empty() {
-                        FormValidState::Invalid
-                    } else {
-                        FormValidState::Valid
-                    }
+                "Event Title", "Event title", None,
+                |_ctx: &mut Context, title: String| match title.trim().is_empty() {
+                    true => FormValidState::Invalid,
+                    false => FormValidState::Valid,
                 },
             ),
             FormItem::enumerator(
@@ -199,21 +111,15 @@ impl NewEvent {
         ];
         let end = vec![
             FormItem::text(
-                "Location",
-                "Location (optional)",
-                None,
+                "Location", "Location (optional)", None,
                 |_ctx: &mut Context, _location: String| FormValidState::Valid,
             ),
             FormItem::text(
-                "Info",
-                "Info (optional)",
-                None,
+                "Info", "Info (optional)", None,
                 |_ctx: &mut Context, _info: String| FormValidState::Valid,
             ),
             FormItem::text(
-                "Link",
-                "Link (optional)",
-                Some(vec![FormAction::Paste]),
+                "Link", "Link (optional)", Some(vec![FormAction::Paste]),
                 |_ctx: &mut Context, _link: String| FormValidState::Valid,
             ),
         ];
@@ -222,7 +128,7 @@ impl NewEvent {
         Form::flow(theme, items, Some(review), Some(success), submit)
     }
 
-    fn review(event: &Event, timing: Vec<(&str, String)>) -> Vec<Display> {
+    fn review(event: &Event) -> Vec<Display> {
         let start = event.timing().start_date();
         let repeat = match event.recurrence() {
             Some(recurrence) => ChangeRepeat::rows(Some(recurrence), start),
@@ -233,7 +139,7 @@ impl NewEvent {
                 ("Title", event.title().to_string()),
                 ("Category", event.category().label().to_string()),
             ],
-            timing,
+            ChangeTime::rows(event.timing()),
             repeat,
             [
                 event.location().map(|location| ("Location", location.to_string())),
@@ -250,8 +156,7 @@ impl NewEvent {
     }
 }
 
-/// The choices on the event-type picker. UI-only: never stored. Change time's Timed / All-day
-/// picker uses the first two.
+/// The choices on the event-type picker. UI-only: never stored.
 #[derive(Clone, Copy)]
 pub enum EventKind {
     Regular,
@@ -261,7 +166,7 @@ pub enum EventKind {
 }
 
 impl EventKind {
-    pub fn options() -> [EventKind; 4] {
+    fn options() -> [EventKind; 4] {
         [EventKind::Regular, EventKind::AllDay, EventKind::Repeating, EventKind::RepeatingAllDay]
     }
 
@@ -282,4 +187,7 @@ impl EventKind {
             EventKind::RepeatingAllDay => "Whole days that repeat, like a birthday",
         }
     }
+
+    fn all_day(self) -> bool { matches!(self, EventKind::AllDay | EventKind::RepeatingAllDay) }
+    fn repeating(self) -> bool { matches!(self, EventKind::Repeating | EventKind::RepeatingAllDay) }
 }
