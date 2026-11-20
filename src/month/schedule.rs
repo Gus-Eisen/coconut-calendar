@@ -233,6 +233,12 @@ pub struct FormTimes {
 }
 
 impl FormTimes {
+    /// No answers yet, except the start date when it's already known: the Day view's Create
+    /// Event skips Date / First Day, and Last Day, Until and End Time read the start from here.
+    pub fn starting(date: Option<NaiveDate>) -> FormTimes {
+        FormTimes { date, ..FormTimes::default() }
+    }
+
     pub fn date(&self) -> Option<NaiveDate> { self.date }
     pub fn start(&self) -> Option<NaiveTime> { self.start }
 

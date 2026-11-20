@@ -1,5 +1,5 @@
 use chk::{
-    Bumper, Context, Display, Flow, ListItem, Offset, Page, PageType, Root, Theme, Watch,
+    Action, Bumper, Context, Display, Flow, ListItem, Offset, Page, PageType, Root, Theme, Watch,
 };
 use chrono::{DateTime, Datelike, Months, NaiveDate, NaiveDateTime, Utc};
 use chrono_tz::Tz;
@@ -41,8 +41,7 @@ impl MonthScreen {
                                     &day.day().to_string(),
                                     &weekday,
                                     summary.as_deref(),
-                                    summary.is_some()
-                                        .then(|| DayScreen::flow(calendar.clone(), day)),
+                                    Some(DayScreen::flow(calendar.clone(), day)),
                                 )
                                 .with_badge(day == today)
                             })
@@ -52,7 +51,7 @@ impl MonthScreen {
                     .collect();
                 drop(state);
                 let new_event = Box::new(move |_ctx: &mut Context, theme: &Theme| {
-                    Flow::from_form(NewEvent::picker(theme, calendar.clone()))
+                    Flow::from_form(NewEvent::picker(theme, calendar.clone(), None))
                 });
                 PageType::root(
                     "Calendar", vec![], months, None,
@@ -93,10 +92,12 @@ impl MonthScreen {
 
 pub struct DayScreen;
 impl DayScreen {
+    /// Every day on the month opens one, even with no events. Today and later days have a
+    /// Create Event button that starts the new-event flow on this day.
     pub fn flow(calendar: Instance<Calendar>, day: NaiveDate) -> Flow {
         Flow::new(vec![Page::watching(
             Watch::contract(calendar),
-            move |_ctx: &mut Context, _theme: &Theme, calendar: Instance<Calendar>| {
+            move |_ctx: &mut Context, theme: &Theme, calendar: Instance<Calendar>| {
                 let zone = Timing::device_zone();
                 let rows = calendar
                     .pending()
@@ -123,7 +124,16 @@ impl DayScreen {
                     false => (Display::list(None, rows, None), Offset::Start),
                 };
                 let title = day.format("%a %-d %b").to_string();
-                PageType::display(&title, vec![items], None, Bumper::None, offset)
+                // A past day can't get a new event: the forms only make today or later.
+                let today = Utc::now().with_timezone(&zone).date_naive();
+                let bumper = match day >= today {
+                    true => {
+                        let picker = NewEvent::picker(theme, calendar.clone(), Some(day));
+                        Bumper::custom("Create Event", Action::flow(Flow::from_form(picker)))
+                    }
+                    false => Bumper::None,
+                };
+                PageType::display(&title, vec![items], None, bumper, offset)
             },
         )])
     }

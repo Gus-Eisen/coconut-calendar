@@ -84,8 +84,9 @@ impl Event {
 
     /// Reads any new-event form. They differ only in their timing steps and, for the repeating
     /// forms, the four repeat steps after them; all end with Location, Info and Link. Timed
-    /// events use the device's time zone.
-    pub fn from_states(states: &[State]) -> Event {
+    /// events use the device's time zone. With `day` (the Day view's Create Event), the form
+    /// skipped Date / First Day and the event starts on `day`.
+    pub fn from_states(states: &[State], day: Option<NaiveDate>) -> Event {
         let [
             State::Text(title), State::Enumerator(category), steps @ .., State::Text(location),
             State::Text(info), State::Text(link),
@@ -96,7 +97,10 @@ impl Event {
             [timing @ .., State::Enumerator(_), _, _, _] => steps.split_at(timing.len()),
             timing => (timing, &[][..]),
         };
-        let timing = Timing::from_states(timing, Timing::device_zone());
+        let timing = match day {
+            Some(day) => Timing::from_start(day, timing, Timing::device_zone()),
+            None => Timing::from_states(timing, Timing::device_zone()),
+        };
         let start = timing.start_date();
         Event {
             title: title.trim().to_string(),

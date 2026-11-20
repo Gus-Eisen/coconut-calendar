@@ -53,22 +53,23 @@ impl Timing {
     /// overnight rule), or Change time's Date, Start Time, End Date and End Time. The validators
     /// have checked every input, so the unwraps can't fail.
     pub fn from_states(states: &[State], time_zone: Tz) -> Timing {
-        let date = |input: &str| Event::date(input).unwrap();
+        let [State::Number(day), rest @ ..] = states else { unreachable!() };
+        Self::from_start(Event::date(day).unwrap(), rest, time_zone)
+    }
+
+    /// Reads the timing steps after Date or First Day, starting on `day`. The Day view's Create
+    /// Event already knows the date (year included), so its forms skip that step.
+    pub fn from_start(day: NaiveDate, states: &[State], time_zone: Tz) -> Timing {
         let time = |input: &str| Event::time(input).unwrap();
         match states {
-            [State::Number(first_day), State::Number(last_day)] => {
-                let first_day = date(first_day);
-                let last_day = Event::date_from(last_day, first_day).unwrap();
-                Timing::AllDay { first_day, last_day }
+            [State::Number(last_day)] => {
+                let last_day = Event::date_from(last_day, day).unwrap();
+                Timing::AllDay { first_day: day, last_day }
             }
-            [State::Number(day), State::Number(start), State::Number(end)] => {
-                Timing::from_times(date(day), time(start), time(end), time_zone).unwrap()
+            [State::Number(start), State::Number(end)] => {
+                Timing::from_times(day, time(start), time(end), time_zone).unwrap()
             }
-            [
-                State::Number(day), State::Number(start), State::Number(end_day),
-                State::Number(end),
-            ] => {
-                let day = date(day);
+            [State::Number(start), State::Number(end_day), State::Number(end)] => {
                 let end_day = Event::date_from(end_day, day).unwrap();
                 Timing::Timed {
                     start: day.and_time(time(start)), end: end_day.and_time(time(end)), time_zone,

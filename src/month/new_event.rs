@@ -1,6 +1,6 @@
 use chk::{
-    Context, Display, Flow, Form, FormComplete, FormItem, FormSubmit, FormValidState, Icons,
-    NumberVariant, Review, State, Success, TableItem, Theme,
+    Context, Display, Flow, Form, FormAction, FormComplete, FormItem, FormSubmit, FormValidState,
+    Icons, NumberVariant, Review, State, Success, TableItem, Theme,
 };
 use chrono::NaiveDate;
 use ramp::prism::air::Instance;
@@ -14,17 +14,22 @@ use super::schedule::{ChangeRepeat, FormTimes};
 
 pub struct NewEvent;
 impl NewEvent {
-    /// Asks which kind of event to create, then resets navigation and opens that kind's form.
-    pub fn picker(theme: &Theme, calendar: Instance<Calendar>) -> Form {
+    /// Asks which kind of event to create, then opens that kind's form in the picker's place:
+    /// chk's Return pops the picker and pushes the form, so Back and Done go to the page the
+    /// picker was opened from (the month, or a Day view). From a Day view, `day` is that day:
+    /// the forms skip Date / First Day and start on it.
+    pub fn picker(theme: &Theme, calendar: Instance<Calendar>, day: Option<NaiveDate>) -> Form {
         let submit = Box::new(move |_ctx: &mut Context, states: &Vec<State>| {
             let [State::Enumerator(index)] = states.as_slice() else { unreachable!() };
             let (kind, calendar) = (EventKind::options()[*index], calendar.clone());
             FormComplete::Return(Box::new(move |ctx: &mut Context, theme: &Theme| {
                 let form = match kind {
-                    EventKind::Regular => Self::form(theme, calendar.clone(), false),
-                    EventKind::AllDay => Self::all_day_form(theme, calendar.clone(), false),
-                    EventKind::Repeating => Self::form(theme, calendar.clone(), true),
-                    EventKind::RepeatingAllDay => Self::all_day_form(theme, calendar.clone(), true),
+                    EventKind::Regular => Self::form(theme, calendar.clone(), false, day),
+                    EventKind::AllDay => Self::all_day_form(theme, calendar.clone(), false, day),
+                    EventKind::Repeating => Self::form(theme, calendar.clone(), true, day),
+                    EventKind::RepeatingAllDay => {
+                        Self::all_day_form(theme, calendar.clone(), true, day)
+                    }
                 };
                 Flow::from_form(form).build(ctx, theme)(ctx, theme)
             }))
@@ -35,10 +40,12 @@ impl NewEvent {
     }
 
     /// The Regular form, or with `repeating` the Repeating form: the same steps plus Repeats,
-    /// Every, Until and Times after End Time.
-    pub fn form(theme: &Theme, calendar: Instance<Calendar>, repeating: bool) -> Form {
-        let review = |states: &Vec<State>| {
-            let event = Event::from_states(states);
+    /// Every, Until and Times after End Time. With `day`, there's no Date step.
+    pub fn form(
+        theme: &Theme, calendar: Instance<Calendar>, repeating: bool, day: Option<NaiveDate>,
+    ) -> Form {
+        let review = move |states: &Vec<State>| {
+            let event = Event::from_states(states, day);
             let Timing::Timed { time_zone, .. } = *event.timing() else { unreachable!() };
             // End Time's validator checked `is_valid`, so `in_zone` can't panic.
             let (start, end) = event.timing().in_zone(time_zone).unwrap();
@@ -49,8 +56,8 @@ impl NewEvent {
             ])
         };
 
-        let success = |states: Vec<State>| {
-            let event = Event::from_states(&states);
+        let success = move |states: Vec<State>| {
+            let event = Event::from_states(&states, day);
             let Timing::Timed { time_zone, .. } = *event.timing() else { unreachable!() };
             // End Time's validator checked `is_valid`, so `in_zone` can't panic.
             let (start, _) = event.timing().in_zone(time_zone).unwrap();
@@ -64,11 +71,10 @@ impl NewEvent {
             (Icons::Checkmark, message)
         };
 
-        let times = Rc::new(RefCell::new(FormTimes::default()));
+        let times = Rc::new(RefCell::new(FormTimes::starting(day)));
         let end_times = times.clone();
 
         let mut timing = vec![
-            FormTimes::date_step("Date", times.clone()),
             FormTimes::start_step("Start Time", times.clone()),
             FormItem::number(
                 "End Time",
@@ -97,21 +103,26 @@ impl NewEvent {
                 },
             ),
         ];
+        if day.is_none() { timing.insert(0, FormTimes::date_step("Date", times.clone())); }
         if repeating { timing.extend(FormTimes::repeat_steps(times, false)); }
 
         Self::flow(
             theme,
             calendar,
+            day,
             timing,
             Review::new("New Event Review", review),
             Success::new("New Event", success),
         )
     }
 
-    /// The All-day form, or with `repeating` the Repeating all-day form.
-    pub fn all_day_form(theme: &Theme, calendar: Instance<Calendar>, repeating: bool) -> Form {
-        let review = |states: &Vec<State>| {
-            let event = Event::from_states(states);
+    /// The All-day form, or with `repeating` the Repeating all-day form. With `day`, there's
+    /// no First Day step.
+    pub fn all_day_form(
+        theme: &Theme, calendar: Instance<Calendar>, repeating: bool, day: Option<NaiveDate>,
+    ) -> Form {
+        let review = move |states: &Vec<State>| {
+            let event = Event::from_states(states, day);
             let Timing::AllDay { first_day, last_day } = *event.timing() else { unreachable!() };
             Self::review(&event, vec![
                 ("First day", first_day.format("%-d %b %Y").to_string()),
@@ -119,8 +130,8 @@ impl NewEvent {
             ])
         };
 
-        let success = |states: Vec<State>| {
-            let event = Event::from_states(&states);
+        let success = move |states: Vec<State>| {
+            let event = Event::from_states(&states, day);
             let Timing::AllDay { first_day, last_day } = *event.timing() else { unreachable!() };
             let days = if first_day == last_day {
                 first_day.format("%-d %b %Y").to_string()
@@ -136,17 +147,16 @@ impl NewEvent {
             (Icons::Checkmark, message)
         };
 
-        let times = Rc::new(RefCell::new(FormTimes::default()));
-        let mut timing = vec![
-            FormTimes::date_step("First Day", times.clone()),
-            FormTimes::end_date_step("Last Day", times.clone()),
-        ];
+        let times = Rc::new(RefCell::new(FormTimes::starting(day)));
+        let mut timing = vec![FormTimes::end_date_step("Last Day", times.clone())];
+        if day.is_none() { timing.insert(0, FormTimes::date_step("First Day", times.clone())); }
         if repeating { timing.extend(FormTimes::repeat_steps(times, false)); }
 
         // chk cuts long titles short, so every new-event review has the same short title.
         Self::flow(
             theme,
             calendar,
+            day,
             timing,
             Review::new("New Event Review", review),
             Success::new("New All-Day Event", success),
@@ -161,11 +171,11 @@ impl NewEvent {
 
     /// Puts the steps both forms share around `timing`, so `Event::from_states` can read either.
     fn flow(
-        theme: &Theme, mut calendar: Instance<Calendar>, timing: Vec<FormItem>, review: Review,
-        success: Success,
+        theme: &Theme, mut calendar: Instance<Calendar>, day: Option<NaiveDate>,
+        timing: Vec<FormItem>, review: Review, success: Success,
     ) -> Form {
         let submit = Box::new(move |_ctx: &mut Context, states: &Vec<State>| {
-            Calendar::create_event(&mut calendar, Event::from_states(states));
+            Calendar::create_event(&mut calendar, Event::from_states(states, day));
             FormComplete::None
         }) as Box<dyn FormSubmit>;
 
@@ -203,7 +213,7 @@ impl NewEvent {
             FormItem::text(
                 "Link",
                 "Link (optional)",
-                None,
+                Some(vec![FormAction::Paste]),
                 |_ctx: &mut Context, _link: String| FormValidState::Valid,
             ),
         ];
