@@ -274,8 +274,9 @@ form:
   "Monthly", "Yearly"), **On** (which days: "Tuesday", "Mon–Fri", "The 31st",
   "3rd Tuesday", "Last Monday", "24 Dec"; none for daily), **First** (only when
   it isn't the start date: "Mon 23 Nov 2026", or "No date matches") and
-  **Ends** ("Never", "On 30 Jun 2027", "After 10 times"). chk clips long table
-  values, so how often and which days are separate rows (`Recurrence::describe`).
+  **Ends** ("Never", "On 30 Jun 2027", "After 10 times"). How often and which
+  days are separate rows (`Recurrence::describe`). Long table values are
+  shortened with "…" to fit (`DayScreen::fit_label`).
 - The success message is "Repeating event saved, from 23 Nov 2026 at 9:00 AM"
   or "Repeating all-day event saved, from 24 Dec 2026", naming the first
   occurrence.
@@ -563,7 +564,8 @@ Repeating all-day 10. From the month they stay 8, 7, 12 and 11.
 - The review shows Title, Category, the timing (Start, End and Time zone, or
   First day and Last day), and Location, Info and Link if they're filled in.
   All-day events have no time-zone row, because their dates are the same
-  everywhere (UI: see 05). The Link step's placeholder is "Link (optional)";
+  everywhere (UI: see 05). Long values are shortened with "…" to fit
+  (`DayScreen::fit_label`). The Link step's placeholder is "Link (optional)";
   it is always valid, and a blank value is stored as `None`. It has a **Paste**
   action ("Paste clipboard") that puts the clipboard text into the field.
   Edit details has no Paste.
@@ -580,19 +582,29 @@ times: "{start} {title}" on the start day (e.g. "11 PM Night"), "until {end}
 {title}" on the day it ends (e.g. "until 1 AM Night"), or "until {d Mon}
 {title}" on a middle day (e.g. "until 6 Dec Trip").
 
-`DayScreen::fit_label(ctx, theme, text) -> String` shortens a month or Day
-row label to fit one column, ending in "…" (U+2026) when it was cut. It
-measures with the renderer's own layout in the row font (`FontStyle::Heading`,
-`TextSize::H5`). The column width is `((window width min 423) − 48 padding −
-32 forward icon − 8 gap) / 2`, then minus 2 pt so the renderer rounding
-widths up still fits. If that width is 0 or the theme has no Heading font,
-the text is left unchanged. Month summaries, Day-view titles and Day-view
-times all go through it.
+`DayScreen::fit_label(theme, width, text, table) -> String` is `pub`. It
+shortens a month or Day row label, or a table value when `table` is true, to
+fit a window `width` wide, ending in "…" (U+2026) when it was cut. It
+measures with the renderer's own layout. Rows use the row font
+(`FontStyle::Heading`, `TextSize::H5`) and the column width `((window width
+min 423) − 48 padding − 32 forward icon − 8 gap) / 2`, then minus 2 pt so
+the renderer rounding widths up still fits. Table values use the table font
+(`FontStyle::Text`, `TextSize::Sm`) and `((window width min 423) − 48
+padding − 8 gap) / 2`, then minus 2 pt: a table row has no forward icon, and
+a long value gets half the width. If that width is 0 or the theme has no
+font, the text is left unchanged. Month summaries, Day-view titles and
+Day-view times go through it with `table` false. Review and detail table
+values are fitted at `TableItem::new` in New Event Review, Change Time,
+Change Repeat, the event detail table and Cancel Occurrence. The string
+helpers themselves (`EventScreen::when`, `ChangeTime::rows`,
+`ChangeRepeat::rows`) still return the full text. Temporary: the helper
+goes once chk's renderer draws its own ellipsis.
 
 `EventScreen::when` is the detail page's Time row: the full `format_time`
 range, with " (d Mon)" on an end that falls on another day, then the start
 date, e.g. "11:00 PM–1:00 AM (26 Nov), Tue 25 Nov". It does not use
-`time_label`. Review tables and save messages also keep `format_time`.
+`time_label`. The table cell may then be shortened with `fit_label`. Review
+tables and save messages also keep `format_time`.
 
 ### Methods on `Calendar`
 
@@ -756,7 +768,9 @@ In `apply`:
 **Editing screens (step 2).** Tapping an event in the day view opens its
 **event detail** page (UI: see 07): a table of Time, Category, Location, Info,
 Link (when set) and Private, and the actions Edit details, Change time, Change
-category, Change privacy and Delete. Since step 3a, a
+category, Change privacy and Delete. Long values in the detail table, and in
+the Change time, Change repeat and Cancel Occurrence reviews, are shortened
+with "…" to fit (`DayScreen::fit_label`). Since step 3a, a
 repeating event adds Repeats, On, First and Ends rows after Time, and there's a
 Change repeat action. Since step 3b, the page shows the tapped occurrence's own
 values (its title, time, location and so on), and on a repeating event the
@@ -1069,17 +1083,25 @@ full; a long title such as "Quarterly Architecture Review Sync" has been
 drawn as "10 AM Quarterly A…" on the month and "Quarterly Architec…" on the
 Day view.
 
-Review and detail tables still clip mid-letter, with no ellipsis: a long
-title has shown as "Quarterly Architectu", and an overnight Time row
-"11:00 PM–1:00 AM (7 Dec), Sun 6 Dec" as "11:00 PM–1:00 AM (7 Dec".
+Review and detail tables use the same helper for values, in the table font
+(Text, Sm) at `((window width, at most 423 pt) − 48 pt padding − 8 pt gap)
+/ 2`, minus 2 pt (171 pt on a 402 pt iPhone 17). A long title has been
+drawn as "Quarterly Architecture R…" on New Event Review, and an overnight
+Time row of "11:00 PM–1:00 AM (5 Dec), Fri 4 Dec" as
+"11:00 PM–1:00 AM (5 Dec…)". Labels are not fitted. The width is measured
+when the page or form is built, so a resized macOS window is not re-fitted
+until the user goes back. Temporary: the helper goes once chk's renderer
+draws its own ellipsis; page header titles still clip mid-letter (e.g.
+"Quarterly Architectu") and should be fixed by that too.
+
 Link values in tables still get cut at `/`: `https://paste.example/room`
 shows as `https://paste.example/`. Keeping the month list's scroll position
 across a rebuild needs an upstream chk change: `Listener::on_change` should
 carry over the `Scrollable` offset, as it already does for a `MessagesPage`
-input. There is no known way to open a link from chk yet. The table clipping,
+input. There is no known way to open a link from chk yet. The `/` cut,
 scroll position and links are with chk's developer. wgpu_prism's one-line
-ellipsis is also still wrong (it draws "…" outside the row); list rows no
-longer rely on it.
+ellipsis is also still wrong (it draws "…" outside the row); list rows and
+table values no longer rely on it.
 
 ### Order of work
 
@@ -1205,11 +1227,13 @@ doesn't decide yet. The open questions in sections 2 and 4 still stand.
   Day is skipped and the start is that day. Every month row is tappable and
   shows a chevron, including empty and past days, because chk shows a chevron
   on any row with a flow. A past Day view has no button.
-- **Ellipsis.** Decided 2026-11-20: month and Day list rows measure text
-  with the renderer's layout and shorten it with "…" (`DayScreen::fit_label`;
-  see the views in section 5). Still open: review and detail tables still
-  clip mid-letter. chk's own one-line ellipsis is still drawn outside the
-  row (see the notes for chk's developer).
+- **Ellipsis.** Decided 2026-11-20: month and Day list rows, and review and
+  detail table values, measure text with the renderer's layout and shorten
+  it with "…" (`DayScreen::fit_label`; see the views in section 5). The
+  helper is temporary until chk's renderer draws its own ellipsis. Still
+  open: page header titles still clip mid-letter. chk's own one-line
+  ellipsis is still drawn outside the row (see the notes for chk's
+  developer).
 
 **Invites and proposals**
 
