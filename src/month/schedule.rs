@@ -114,9 +114,12 @@ impl ChangeTime {
             Timing::Timed { time_zone, .. } => {
                 // Stored timings and checked form timings are valid, so `in_zone` can't panic.
                 let (start, end) = timing.in_zone(time_zone).unwrap();
+                let date_time = |value: chrono::NaiveDateTime| {
+                    format!("{}, {}", value.format("%-d %b %Y"), Timing::format_time(value.time()))
+                };
                 vec![
-                    ("Start", start.format("%-d %b %Y, %H:%M").to_string()),
-                    ("End", end.format("%-d %b %Y, %H:%M").to_string()),
+                    ("Start", date_time(start)),
+                    ("End", date_time(end)),
                     ("Time zone", time_zone.name().to_string()),
                 ]
             }
@@ -288,10 +291,10 @@ impl FormTimes {
     }
 
     pub fn start_step(title: &str, times: Rc<RefCell<FormTimes>>) -> FormItem {
-        FormItem::number(title, NumberVariant::Time, move |_ctx: &mut Context, input: String| {
+        FormItem::text(title, "9:30 AM", None, move |_ctx: &mut Context, input: String| {
             let start = Event::time(&input);
             times.borrow_mut().start = start;
-            Self::validity(&input, start.ok_or("Not a valid time."))
+            Self::validity(&input, start.ok_or("Use 9:30 AM or 21:30."))
         })
     }
 
@@ -316,9 +319,9 @@ impl FormTimes {
     /// End Time: after the start in `zone`. With an End Date step it ends on that date;
     /// without one (the new-event forms) an earlier end means the next day.
     pub fn end_time_step(times: Rc<RefCell<FormTimes>>, zone: Tz) -> FormItem {
-        FormItem::number("End Time", NumberVariant::Time, move |_ctx: &mut Context, input: String| {
+        FormItem::text("End Time", "9:30 AM", None, move |_ctx: &mut Context, input: String| {
             let times = times.borrow();
-            let checked = Event::time(&input).ok_or("Not a valid time.").and_then(|end| {
+            let checked = Event::time(&input).ok_or("Use 9:30 AM or 21:30.").and_then(|end| {
                 let timing = match (times.date, times.start, times.end_date) {
                     (Some(date), Some(start), Some(end_date)) => Some(Timing::Timed {
                         start: date.and_time(start), end: end_date.and_time(end), time_zone: zone,

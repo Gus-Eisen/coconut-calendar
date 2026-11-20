@@ -43,6 +43,8 @@ impl Timing {
         Utc::now().with_timezone(&Self::device_zone()).date_naive()
     }
 
+    pub fn format_time(time: NaiveTime) -> String { time.format("%-I:%M %p").to_string() }
+
     /// The regular form's timing: it ends on `date`, or the next day if `end` is earlier than
     /// `start`. `None` if `end` equals `start`.
     pub fn from_times(date: NaiveDate, start: NaiveTime, end: NaiveTime, time_zone: Tz) -> Option<Timing> {
@@ -71,10 +73,10 @@ impl Timing {
                 let last_day = Event::date_from(last_day, day).unwrap();
                 Timing::AllDay { first_day: day, last_day }
             }
-            [State::Number(start), State::Number(end)] => {
+            [State::Text(start), State::Text(end)] => {
                 Timing::from_times(day, time(start), time(end), time_zone).unwrap()
             }
-            [State::Number(start), State::Number(end_day), State::Number(end)] => {
+            [State::Text(start), State::Number(end_day), State::Text(end)] => {
                 let end_day = Event::date_from(end_day, day).unwrap();
                 Timing::Timed {
                     start: day.and_time(time(start)), end: end_day.and_time(time(end)), time_zone,

@@ -134,8 +134,9 @@ impl DayScreen {
         format!("{}–{}", Self::clock_label(start, day), Self::clock_label(end, day))
     }
 
-    /// A time as "HH:MM", with its date when it isn't on `day`: "HH:MM (3 Nov)".
+    /// A clock time, with its date when it isn't on `day`, e.g. "9:30 AM (3 Nov)".
     fn clock_label(time: NaiveDateTime, day: NaiveDate) -> String {
-        time.format(if time.date() == day { "%H:%M" } else { "%H:%M (%-d %b)" }).to_string()
+        let clock = Timing::format_time(time.time());
+        if time.date() == day { clock } else { format!("{clock} ({})", time.format("%-d %b")) }
     }
 }

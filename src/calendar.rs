@@ -79,7 +79,20 @@ impl Event {
     }
 
     pub fn time(input: &str) -> Option<NaiveTime> {
-        NaiveTime::parse_from_str(input, "%H:%M").ok()
+        let input = input.trim();
+        let uppercase = input.to_ascii_uppercase();
+        if let Some(clock) = uppercase.strip_suffix("AM").or_else(|| uppercase.strip_suffix("PM")) {
+            let meridiem = &uppercase[clock.len()..];
+            let clock = clock.trim_end();
+            let normalized = if clock.contains(':') {
+                format!("{clock} {meridiem}")
+            } else {
+                format!("{clock}:00 {meridiem}")
+            };
+            NaiveTime::parse_from_str(&normalized, "%I:%M %p").ok()
+        } else {
+            NaiveTime::parse_from_str(input, "%H:%M").ok()
+        }
     }
 
     /// Reads any new-event form. They differ only in their timing steps and, for the repeating

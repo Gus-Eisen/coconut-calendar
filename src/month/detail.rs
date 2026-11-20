@@ -67,7 +67,7 @@ impl EventScreen {
         )])
     }
 
-    /// The detail page's time in `zone`: "14:00–15:00, Tue 3 Nov", or "All day, Tue 3 Nov".
+    /// The detail page's time in `zone`: "2:00 PM–3:00 PM, Tue 3 Nov", or "All day, Tue 3 Nov".
     pub fn when(timing: &Timing, zone: Tz) -> String {
         let day = |date: NaiveDate| date.format("%a %-d %b").to_string();
         match *timing {

@@ -93,7 +93,7 @@ impl NewEvent {
                 (Timing::Timed { time_zone, .. }, first) => {
                     // End Time's validator checked `is_valid`, so `in_zone` can't panic.
                     let (start, _) = event.timing().in_zone(time_zone).unwrap();
-                    let time = start.format("%H:%M");
+                    let time = Timing::format_time(start.time());
                     match first {
                         Some(first) => {
                             format!("Repeating event saved, from {} at {time}", date(first))
