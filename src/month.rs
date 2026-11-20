@@ -20,9 +20,11 @@ impl MonthScreen {
             Watch::contract(Calendar::open(ctx)),
             |_ctx: &mut Context, _theme: &Theme, calendar: Instance<Calendar>| {
                 let (state, now, first) = (calendar.pending(), Utc::now(), Event::window_start());
-                let months = (0..13u32).map(|month| {
-                    Self::month_display(&calendar, &state, first + Months::new(month), now)
-                }).collect();
+                let (zone, today) = (Timing::device_zone(), Timing::today());
+                let months = (0..13u32)
+                    .map(|month| first + Months::new(month))
+                    .map(|start| Self::month_display(&calendar, &state, start, now, zone, today))
+                    .collect();
                 drop(state);
                 let new_event = Box::new(move |_ctx: &mut Context, theme: &Theme| {
                     Flow::from_form(NewEvent::picker(theme, calendar.clone(), None))
@@ -36,8 +38,7 @@ impl MonthScreen {
     }
 
     /// One month's list, from its first day `start`: a row per day, each opening that day.
-    fn month_display(calendar: &Instance<Calendar>, state: &Calendar, start: NaiveDate, now: DateTime<Utc>) -> Display {
-        let (zone, today) = (Timing::device_zone(), Timing::today());
+    fn month_display(calendar: &Instance<Calendar>, state: &Calendar, start: NaiveDate, now: DateTime<Utc>, zone: Tz, today: NaiveDate) -> Display {
         let end = start + Months::new(1);
         let days = start.iter_days().take_while(|day| *day < end).map(|day| {
             let summary = Self::summary(&state.on(day, zone), day, now, zone);

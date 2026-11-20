@@ -61,10 +61,7 @@ impl Override {
         let text = |field: Option<Option<String>>| {
             field.map(|value| value.as_deref().and_then(Event::optional))
         };
-        let title = match self.title {
-            Some(title) => Some(Event::optional(&title)?),
-            None => None,
-        };
+        let title = self.title.map(|title| Event::optional(&title).ok_or(())).transpose().ok()?;
         if self.timing.is_some_and(|timing| !timing.is_valid()) || !self.responses.is_empty() {
             return None;
         }

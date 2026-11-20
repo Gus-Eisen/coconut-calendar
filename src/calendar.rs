@@ -185,17 +185,6 @@ impl Event {
         Some(event)
     }
 
-    /// The occurrence's title: its own if it was renamed, else the series'.
-    fn title_on(&self, date: NaiveDate) -> &str {
-        self.changes(date).and_then(Override::title).unwrap_or(&self.title)
-    }
-
-    /// The repeat rule once the series' timing becomes `timing` (see `Recurrence::moved`).
-    fn retimed(&self, timing: &Timing) -> Option<Recurrence> {
-        let (from, to) = (self.timing.start_date(), timing.start_date());
-        self.recurrence.as_ref().map(|recurrence| recurrence.moved(from, to))
-    }
-
     /// How many single changes `apply` would drop if the series became `timing` with the
     /// rule `recurrence`: those whose original date the new rule no longer picks. `None` for
     /// `recurrence` means it stops repeating, which drops them all.
@@ -211,6 +200,12 @@ impl Event {
     /// `dropped` for a whole-series Change time, whose rule follows the new start.
     pub fn dropped_by_timing(&self, timing: &Timing) -> usize {
         self.dropped(timing, self.retimed(timing).as_ref())
+    }
+
+    /// The repeat rule once the series' timing becomes `timing` (see `Recurrence::moved`).
+    fn retimed(&self, timing: &Timing) -> Option<Recurrence> {
+        let (from, to) = (self.timing.start_date(), timing.start_date());
+        self.recurrence.as_ref().map(|recurrence| recurrence.moved(from, to))
     }
 
     /// The occurrences covering `date` in `zone`, with their original dates. Only start dates
@@ -269,7 +264,9 @@ impl<'a> Occurrence<'a> {
     /// The series. Use `title` and `timing` for this occurrence's own values.
     pub fn event(&self) -> &'a Event { self.event }
     /// Its own title if it was renamed, else the series'.
-    pub fn title(&self) -> &'a str { self.event.title_on(self.date) }
+    pub fn title(&self) -> &'a str {
+        self.event.changes(self.date).and_then(Override::title).unwrap_or(&self.event.title)
+    }
     /// The date it would normally start on, in the event's own zone. It identifies the
     /// occurrence within its series.
     pub fn date(&self) -> NaiveDate { self.date }
@@ -481,15 +478,14 @@ impl Contract for Calendar {
             }
             CalendarMessage::SetRecurrence { id, recurrence } => {
                 let Some(event) = self.editable(id) else { return };
-                let Some(recurrence) = recurrence else {
+                let Some(mut recurrence) = recurrence else {
                     event.recurrence = None;
                     return;
                 };
-                // Exceptions only change through their own messages (step 3b), so the event's
-                // own are kept and any sent here are ignored.
+                // Exceptions only change through their own messages, so the event's own are kept
+                // and any sent here are ignored.
                 let exceptions = event.recurrence.as_ref()
                     .map(|current| current.exceptions().clone()).unwrap_or_default();
-                let mut recurrence = recurrence;
                 *recurrence.exceptions_mut() = exceptions;
                 let recurrence = recurrence.normalised();
                 if recurrence.is_valid(&event.timing) {

@@ -20,10 +20,6 @@ pub struct Recurrence {
 }
 
 impl Recurrence {
-    pub fn new(frequency: Frequency, interval: u16, until: Option<NaiveDate>, count: Option<u16>) -> Recurrence {
-        Recurrence { frequency, interval, until, count, exceptions: BTreeMap::new() }
-    }
-
     /// Reads the Repeats, Every, Until and Times steps; `None` for "Doesn't repeat". Until is
     /// the first such date on or after `earliest`. Blank or 0 (chk's number keypad starts at
     /// "0") means every 1, and no limit on Times. The validators have checked every input.
@@ -37,13 +33,11 @@ impl Recurrence {
         let frequency = Repeat::options()[*repeat].frequency(start)?;
         let number = |input: &str| input.parse::<u16>().ok().filter(|number| *number > 0);
         let until = Event::date_from(until, earliest);
-        Some(Recurrence::new(frequency, number(every).unwrap_or(1), until, number(times)))
+        let (interval, count) = (number(every).unwrap_or(1), number(times));
+        Some(Recurrence { frequency, interval, until, count, exceptions: BTreeMap::new() })
     }
 
-    pub fn frequency(&self) -> &Frequency { &self.frequency }
-    pub fn interval(&self) -> u16 { self.interval }
     pub fn until(&self) -> Option<NaiveDate> { self.until }
-    pub fn count(&self) -> Option<u16> { self.count }
     pub fn exceptions(&self) -> &BTreeMap<NaiveDate, Exception> { &self.exceptions }
     pub fn exceptions_mut(&mut self) -> &mut BTreeMap<NaiveDate, Exception> { &mut self.exceptions }
 

@@ -12,6 +12,42 @@ use crate::{Calendar, Category, Event, Timing};
 
 use super::schedule::{ChangeRepeat, ChangeTime, FormTimes};
 
+/// The choices on the event-type picker. UI-only: never stored.
+#[derive(Clone, Copy)]
+enum EventKind {
+    Regular,
+    AllDay,
+    Repeating,
+    RepeatingAllDay,
+}
+
+impl EventKind {
+    fn options() -> [EventKind; 4] {
+        [EventKind::Regular, EventKind::AllDay, EventKind::Repeating, EventKind::RepeatingAllDay]
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            EventKind::Regular => "Regular",
+            EventKind::AllDay => "All-Day",
+            EventKind::Repeating => "Repeating",
+            EventKind::RepeatingAllDay => "Repeating All-Day",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            EventKind::Regular => "Starts and ends at set times",
+            EventKind::AllDay => "Lasts one or more whole days",
+            EventKind::Repeating => "Happens again at set times",
+            EventKind::RepeatingAllDay => "Whole days that repeat, like a birthday",
+        }
+    }
+
+    fn all_day(self) -> bool { matches!(self, EventKind::AllDay | EventKind::RepeatingAllDay) }
+    fn repeating(self) -> bool { matches!(self, EventKind::Repeating | EventKind::RepeatingAllDay) }
+}
+
 pub struct NewEvent;
 impl NewEvent {
     /// Asks which kind of event to create, then opens that kind's form in the picker's place:
@@ -87,10 +123,7 @@ impl NewEvent {
     }
 
     /// Puts the steps every kind shares around `timing`, so `Event::from_states` can read either.
-    fn flow(
-        theme: &Theme, mut calendar: Instance<Calendar>, day: Option<NaiveDate>,
-        timing: Vec<FormItem>, review: Review, success: Success,
-    ) -> Form {
+    fn flow(theme: &Theme, mut calendar: Instance<Calendar>, day: Option<NaiveDate>, timing: Vec<FormItem>, review: Review, success: Success) -> Form {
         let submit = Box::new(move |_ctx: &mut Context, states: &Vec<State>| {
             Calendar::create_event(&mut calendar, Event::from_states(states, day));
             FormComplete::None
@@ -154,38 +187,3 @@ impl NewEvent {
     }
 }
 
-/// The choices on the event-type picker. UI-only: never stored.
-#[derive(Clone, Copy)]
-pub enum EventKind {
-    Regular,
-    AllDay,
-    Repeating,
-    RepeatingAllDay,
-}
-
-impl EventKind {
-    fn options() -> [EventKind; 4] {
-        [EventKind::Regular, EventKind::AllDay, EventKind::Repeating, EventKind::RepeatingAllDay]
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            EventKind::Regular => "Regular",
-            EventKind::AllDay => "All-Day",
-            EventKind::Repeating => "Repeating",
-            EventKind::RepeatingAllDay => "Repeating All-Day",
-        }
-    }
-
-    fn description(self) -> &'static str {
-        match self {
-            EventKind::Regular => "Starts and ends at set times",
-            EventKind::AllDay => "Lasts one or more whole days",
-            EventKind::Repeating => "Happens again at set times",
-            EventKind::RepeatingAllDay => "Whole days that repeat, like a birthday",
-        }
-    }
-
-    fn all_day(self) -> bool { matches!(self, EventKind::AllDay | EventKind::RepeatingAllDay) }
-    fn repeating(self) -> bool { matches!(self, EventKind::Repeating | EventKind::RepeatingAllDay) }
-}

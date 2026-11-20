@@ -11,6 +11,13 @@ use crate::{Calendar, Category, Event, EventId, Exception, Override, Timing};
 use super::DayScreen;
 use super::schedule::{ChangeRepeat, ChangeTime};
 
+/// What an edit applies to: the whole series, or one occurrence by its original date.
+#[derive(Clone, Copy)]
+pub enum Scope {
+    Series,
+    Occurrence(NaiveDate),
+}
+
 /// One event's detail page and the flows that edit it.
 pub struct EventScreen;
 impl EventScreen {
@@ -58,6 +65,49 @@ impl EventScreen {
                 )
             },
         )])
+    }
+
+    /// The detail page's time in `zone`: "14:00–15:00, Tue 3 Nov", or "All day, Tue 3 Nov".
+    pub fn when(timing: &Timing, zone: Tz) -> String {
+        let day = |date: NaiveDate| date.format("%a %-d %b").to_string();
+        match *timing {
+            Timing::AllDay { first_day, last_day } if first_day == last_day => {
+                format!("All day, {}", day(first_day))
+            }
+            Timing::AllDay { first_day, last_day } => {
+                format!("All day, {} – {}", day(first_day), day(last_day))
+            }
+            Timing::Timed { .. } => {
+                // `apply` stores only valid timings and `occurrence` returns only valid ones, so
+                // `in_zone` can't panic.
+                let (start, _) = timing.in_zone(zone).unwrap();
+                let time = DayScreen::time_label(timing, start.date(), zone);
+                format!("{time}, {}", day(start.date()))
+            }
+        }
+    }
+
+    /// Ends the current flow and shows the page under it: the detail page, or the day screen
+    /// after Delete.
+    pub fn back() -> FormComplete { FormComplete::Return(Box::new(|_: &mut Context, _: &Theme| {})) }
+
+    /// Sends the occurrence's changes with `edit` applied, starting from its current ones.
+    /// `edit` also gets the series, whose values mean "same as the series". If nothing is left
+    /// that differs, it restores the occurrence instead. A cancelled occurrence is left alone.
+    pub fn change(calendar: &mut Instance<Calendar>, id: EventId, date: NaiveDate, edit: impl FnOnce(&mut Override, &Event)) {
+        let Some(series) = calendar.pending().event(id).cloned() else { return };
+        let current = match series.exception(date) {
+            Some(Exception::Cancelled) => return,
+            Some(Exception::Changed(changes)) => Some(changes.clone()),
+            None => None,
+        };
+        let mut changes = current.clone().unwrap_or_default();
+        edit(&mut changes, &series);
+        if changes.is_empty() && current.is_some() {
+            Calendar::restore_occurrence(calendar, id, date);
+        } else if !changes.is_empty() && current.as_ref() != Some(&changes) {
+            Calendar::change_occurrence(calendar, id, date, changes);
+        }
     }
 
     /// The detail table for `event`, the occurrence on `date`: Time (and Series time when this
@@ -129,42 +179,16 @@ impl EventScreen {
         PageType::display("Event", vec![message], None, Bumper::None, Offset::Center)
     }
 
-    /// The detail page's time in `zone`: "14:00–15:00, Tue 3 Nov", or "All day, Tue 3 Nov".
-    pub fn when(timing: &Timing, zone: Tz) -> String {
-        let day = |date: NaiveDate| date.format("%a %-d %b").to_string();
-        match *timing {
-            Timing::AllDay { first_day, last_day } if first_day == last_day => {
-                format!("All day, {}", day(first_day))
-            }
-            Timing::AllDay { first_day, last_day } => {
-                format!("All day, {} – {}", day(first_day), day(last_day))
-            }
-            Timing::Timed { .. } => {
-                // `apply` stores only valid timings and `occurrence` returns only valid ones, so
-                // `in_zone` can't panic.
-                let (start, _) = timing.in_zone(zone).unwrap();
-                let time = DayScreen::time_label(timing, start.date(), zone);
-                format!("{time}, {}", day(start.date()))
-            }
-        }
-    }
-
-    /// Ends the current flow and shows the page under it: the detail page, or the day screen
-    /// after Delete.
-    pub fn back() -> FormComplete { FormComplete::Return(Box::new(|_: &mut Context, _: &Theme| {})) }
-
     /// A callback that opens the form `make` builds. It runs after the scope step has closed,
     /// so the form opens on top of the detail page.
-    fn open(
-        make: impl Fn(&Theme) -> Form + Clone + 'static,
-    ) -> impl FnMut(&mut Context, &Theme) + Clone + 'static {
+    fn open(make: impl Fn(&Theme) -> Form + Clone + 'static) -> impl FnMut(&mut Context, &Theme) + Clone + 'static {
         move |ctx: &mut Context, theme: &Theme| {
             Flow::from_form(make(theme)).build(ctx, theme)(ctx, theme)
         }
     }
 
     /// On a repeating event, the "Which Events?" step (`scope`). An event that doesn't repeat
-    /// runs `whole` straight away, as before step 3b.
+    /// runs `whole` straight away.
     fn scoped(
         theme: &Theme, series: &Event, date: NaiveDate,
         this: impl FnMut(&mut Context, &Theme) + Clone + 'static,
@@ -197,33 +221,9 @@ impl EventScreen {
         Flow::from_form(Form::flow(theme, vec![scope], None, None, submit))
     }
 
-    /// Sends the occurrence's changes with `edit` applied, starting from its current ones.
-    /// `edit` also gets the series, whose values mean "same as the series". If nothing is left
-    /// that differs, it restores the occurrence instead. A cancelled occurrence is left alone.
-    pub fn change(
-        calendar: &mut Instance<Calendar>, id: EventId, date: NaiveDate,
-        edit: impl FnOnce(&mut Override, &Event),
-    ) {
-        let Some(series) = calendar.pending().event(id).cloned() else { return };
-        let current = match series.exception(date) {
-            Some(Exception::Cancelled) => return,
-            Some(Exception::Changed(changes)) => Some(changes.clone()),
-            None => None,
-        };
-        let mut changes = current.clone().unwrap_or_default();
-        edit(&mut changes, &series);
-        if changes.is_empty() && current.is_some() {
-            Calendar::restore_occurrence(calendar, id, date);
-        } else if !changes.is_empty() && current.as_ref() != Some(&changes) {
-            Calendar::change_occurrence(calendar, id, date, changes);
-        }
-    }
-
     /// Edit details, as a flow because the header's edit icon opens it too: the scope step
     /// first on a repeating event.
-    fn edit(
-        theme: &Theme, calendar: &Instance<Calendar>, id: EventId, date: NaiveDate, series: &Event,
-    ) -> Flow {
+    fn edit(theme: &Theme, calendar: &Instance<Calendar>, id: EventId, date: NaiveDate, series: &Event) -> Flow {
         let whole = {
             let (calendar, series) = (calendar.clone(), series.clone());
             Self::open(move |_theme: &Theme| Self::edit_details(calendar.clone(), id, &series))
@@ -240,12 +240,9 @@ impl EventScreen {
         }
     }
 
-    /// Delete. Whole series deletes the event at once, as before; This occurrence opens the
-    /// Cancel Occurrence review first, because cancelling can't be undone. Both end on the day
-    /// screen.
-    fn delete(
-        theme: &Theme, calendar: &Instance<Calendar>, id: EventId, date: NaiveDate, series: &Event,
-    ) -> Action {
+    /// Delete. Whole series deletes the event at once; This occurrence opens the Cancel
+    /// Occurrence review first, because cancelling can't be undone. Both end on the day screen.
+    fn delete(theme: &Theme, calendar: &Instance<Calendar>, id: EventId, date: NaiveDate, series: &Event) -> Action {
         let whole = {
             let mut calendar = calendar.clone();
             move |ctx: &mut Context, theme: &Theme| {
@@ -369,10 +366,7 @@ impl EventScreen {
 
     /// A one-step radio. chk always selects the first option, so the event's value is marked
     /// "Current" instead. Picking it again sends nothing.
-    fn choice(
-        theme: &Theme, title: &str, labels: [&str; 2], current: usize,
-        mut pick: impl FnMut(usize) + Clone + 'static,
-    ) -> Form {
+    fn choice(theme: &Theme, title: &str, labels: [&str; 2], current: usize, mut pick: impl FnMut(usize) + Clone + 'static) -> Form {
         let submit = Box::new(move |_ctx: &mut Context, states: &Vec<State>| {
             let [State::Enumerator(index)] = states.as_slice() else { unreachable!() };
             if *index != current { pick(*index); }
@@ -384,11 +378,4 @@ impl EventScreen {
             .collect();
         Form::flow(theme, vec![FormItem::enumerator(title, options)], None, None, submit)
     }
-}
-
-/// What an edit applies to: the whole series, or one occurrence by its original date.
-#[derive(Clone, Copy)]
-pub enum Scope {
-    Series,
-    Occurrence(NaiveDate),
 }
