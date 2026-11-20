@@ -75,9 +75,9 @@ pub enum Timing {
   lands the next morning).
 - **Time zones:** a `Timed` event is stored as the clock time where it happens,
   plus that place's time zone. Users see it converted to their own time zone. A
-  9:00 meeting in New York shows as 15:00 for someone in Paris.
-- **Repeating events keep their clock time:** a weekly 9:00 meeting in New York
-  stays at 9:00 New York time when daylight saving time starts or ends. Storing
+  9:00 AM meeting in New York shows as 3:00 PM for someone in Paris.
+- **Repeating events keep their clock time:** a weekly 9:00 AM meeting in New York
+  stays at 9:00 AM New York time when daylight saving time starts or ends. Storing
   the time zone, not just a fixed offset, is what makes this possible.
 - **All-day events have no time zone.** A birthday on 10 November is on
   10 November everywhere.
@@ -224,7 +224,7 @@ Dates a month or year doesn't have are skipped:
 
 Each occurrence has the same clock times as the first (timed) or the same
 number of days (all-day), moved to its date. Times are resolved in the event's
-zone with `Timing`'s usual rules, so a 09:00 event stays at 09:00 across
+zone with `Timing`'s usual rules, so a 9:00 AM event stays at 9:00 AM across
 daylight saving. An occurrence whose times can't be worked out is skipped.
 
 **Creating a repeating event (step 3a, decided 2026-11-17).** The event-type
@@ -276,7 +276,7 @@ form:
   it isn't the start date: "Mon 23 Nov 2026", or "No date matches") and
   **Ends** ("Never", "On 30 Jun 2027", "After 10 times"). chk clips long table
   values, so how often and which days are separate rows (`Recurrence::describe`).
-- The success message is "Repeating event saved, from 23 Nov 2026 at 09:00"
+- The success message is "Repeating event saved, from 23 Nov 2026 at 9:00 AM"
   or "Repeating all-day event saved, from 24 Dec 2026", naming the first
   occurrence.
 
@@ -444,7 +444,7 @@ Helpers for the new-event forms:
 | `window_start` | `fn window_start() -> NaiveDate` | The first day of `Timing::today()`'s month, where the month list starts. |
 | `date` | `fn date(input: &str) -> Option<NaiveDate>` | Reads a `DD-MM` date as the first such date on or after today (`Timing::today()`): `date_from(input, today)`. Used for every first date (Date, First Day). `None` if the input isn't a valid date. |
 | `date_from` | `fn date_from(input: &str, earliest: NaiveDate) -> Option<NaiveDate>` | Reads a `DD-MM` date as the first such date on or after `earliest`: it tries `earliest`'s year, then the next year. `None` if neither gives a valid date on or after `earliest` (e.g. `29-02` when the next 29 February is more than a year away). |
-| `time` | `fn time(input: &str) -> Option<NaiveTime>` | Reads an `HH:MM` time (24-hour). `None` if invalid. |
+| `time` | `fn time(input: &str) -> Option<NaiveTime>` | Reads a clock time after trim, case-insensitive. Accepts 12-hour forms such as `9:30 AM`, `9:30am`, `9:30 pm` and `9am` (missing minutes mean `:00`; hour 1–12; `12 AM` is 00:00, `12 PM` is 12:00) and 24-hour `21:30` or `09:30` (hour 0–23, no meridiem). `None` if invalid (e.g. `13:00 pm`, `9:75`). |
 | `from_states` | `fn from_states(states: &[State], day: Option<NaiveDate>) -> Event` | Builds an `Event` from any new-event form's inputs, in the device's time zone. All four forms end with Location, Info and Link; those are stored with `optional`. With `Some(day)` (the Day view's Create Event), the form skipped Date / First Day and the event starts on `day`, via `Timing::from_start`. With `None` (the month's Create Event), it reads Date / First Day with `Timing::from_states`. Sets `deleted: false`. The form checks the inputs first, so this panics if they're invalid. It only ever reads form inputs, never AIR data. |
 | `optional` | `fn optional(input: &str) -> Option<String>` | Trims a text. Returns `None` if it's empty. The forms and `apply` both use it, so they share one rule. |
 
@@ -478,10 +478,11 @@ compare with a rule a form built).
 | -------- | ----------- | -------------- |
 | `device_zone` | `fn device_zone() -> Tz` | The device's time zone, or UTC if the device reports one that `chrono-tz` doesn't recognise. |
 | `today` | `fn today() -> NaiveDate` | Today's date in the device's time zone (`device_zone`). `Event::window_start` (still in the API) is the first day of this month; `Event::date` reads a `DD-MM` on or after today; Change repeat's Until earliest is `max(start, today)`; the month's Today marker and the Day view's Create Event button (today or later) also use it. |
+| `format_time` | `fn format_time(time: NaiveTime) -> String` | A clock time as 12-hour `h:mm AM/PM` (`"%-I:%M %p"`): "9:30 AM", midnight "12:00 AM", noon "12:00 PM". Every user-facing time uses this. |
 | `is_valid` | `fn is_valid(&self) -> bool` | `AllDay`: `last_day` is on or after `first_day`. `Timed`: both times can be worked out in `time_zone`, and `end` is after `start`. `apply` and both forms use this one rule. |
 | `from_times` | `fn from_times(date: NaiveDate, start: NaiveTime, end: NaiveTime, time_zone: Tz) -> Option<Timing>` | The regular form's timing: ends on `date`, or the next day if `end` is earlier than `start`. `None` if they're equal. Callers still check `is_valid`. |
 | `from_states` | `fn from_states(states: &[State], time_zone: Tz) -> Timing` | Reads a form's Date or First Day with `Event::date`, then the rest with `from_start`. Used by the month's Create Event and by Change time. The form checks the inputs first, so this panics if they're invalid. |
-| `from_start` | `fn from_start(day: NaiveDate, states: &[State], time_zone: Tz) -> Timing` | Reads the timing steps after Date or First Day, starting on `day` as-is (year included): Last Day (`AllDay`, by `Event::date_from` from `day`); Start Time and End Time (the overnight rule of `from_times`); or Start Time, End Date and End Time (Change time, End Date by `Event::date_from` from `day`). The Day view's Create Event already has the date, so its forms skip Date / First Day and call this. The form checks the inputs first, so this panics if they're invalid. |
+| `from_start` | `fn from_start(day: NaiveDate, states: &[State], time_zone: Tz) -> Timing` | Reads the timing steps after Date or First Day, starting on `day` as-is (year included): Last Day (`AllDay`, `State::Number`, by `Event::date_from` from `day`); Start Time and End Time (`State::Text`, the overnight rule of `from_times`); or Start Time, End Date and End Time (Change time; times are `State::Text`, End Date is `State::Number` by `Event::date_from` from `day`). The Day view's Create Event already has the date, so its forms skip Date / First Day and call this. The form checks the inputs first, so this panics if they're invalid. |
 | `in_zone` | `fn in_zone(&self, zone: Tz) -> Option<(NaiveDateTime, NaiveDateTime)>` | The start and end as clock times in `zone`. `None` for an all-day event. |
 | `covers` | `fn covers(&self, date: NaiveDate, zone: Tz) -> bool` | Whether any part of the event falls on `date` in `zone` (days are half-open). All-day events ignore `zone`. |
 
@@ -527,10 +528,15 @@ the 13th month keeps its year). Last Day, Start Time, End Time, Until and the
 repeat steps stay. The counts are Regular 7, All-day 6, Repeating 11,
 Repeating all-day 10. From the month they stay 8, 7, 12 and 11.
 
-- Dates are `DD-MM` (`Event::date`), and times are `HH:MM` (`Event::time`).
+- Dates are `DD-MM` (`Event::date`) on the number keypad. Start Time and
+  End Time are text steps (`FormItem::text`, placeholder "9:30 AM"): chk's
+  time keypad is a four-digit `HH:MM` pad with no letters. `Event::time`
+  accepts 12-hour forms (`9:30 AM`, `9:30pm`, `9am`) and 24-hour `21:30`.
+  Invalid input shows "Use 9:30 AM or 21:30." and turns Continue off.
+  Date / Last Day / End Date / Until stay on the number keypad.
 - The new-event forms have no End Date step (Gus, 2026-11-16). The end date
   is worked out from End Time: if End Time is later than Start Time, the event
-  ends on Date; if it's earlier, the event ends the next day (23:00 to 01:00
+  ends on Date; if it's earlier, the event ends the next day (11:00 PM to 1:00 AM
   is an overnight event). An End Time equal to Start Time is an error ("Must
   be different from the start."). So a timed event made with this form lasts
   under 24 hours. Longer timed events are made by changing the end with
@@ -566,7 +572,7 @@ Repeating all-day 10. From the month they stay 8, 7, 12 and 11.
 
 `DayScreen::time_label(timing, day, zone) -> String` is how the views show an
 occurrence's time: "All day", or the start and end in `zone`. Any part that isn't on
-`day` also shows its date, e.g. "23:00–01:00 (16 Nov)".
+`day` also shows its date, e.g. "11:00 PM–1:00 AM (16 Nov)".
 
 ### Methods on `Calendar`
 
@@ -743,7 +749,7 @@ split:
 | Screen | What it changes | How |
 |--------|-----------------|-----|
 | Edit details (UI: see 08) | Title, Location, Info, Link | One page (`Form::page` / `PageType::edit_and_display`) with a `FormItem::text_with_preset` for each field, filled with the current values. Save stays off until something changes and every field is valid. A blank Link is stored as `None`. Calls the setter for each changed field. On a repeating event, the existing Which Events? step covers the link like the other text fields. |
-| Change time (UI: see 09) | `timing` | A flow: Date, Start Time, End Date, End Time, then a review showing the current and new times. Step titles are plain ("Start Time", "End Time"): chk clips longer ones. Date is on or after today; End Date uses the same rule as Last Day (on or after the start, at most 28 days later). Times are typed and shown in the event's own time zone (the `time_zone` in its `Timing`), and the review names it. An all-day event changed to timed uses the device's zone. Calls `set_timing`, unless the timing is unchanged. For one occurrence (3b), Current is the occurrence's own time, there's no Until limit, and it calls `change_occurrence`. |
+| Change time (UI: see 09) | `timing` | A flow: Date, Start Time, End Date, End Time, then a review showing the current and new times. Step titles are plain ("Start Time", "End Time"): chk clips longer ones. Date is on or after today; End Date uses the same rule as Last Day (on or after the start, at most 28 days later). Start Time and End Time are text steps, same as the new-event forms. Times are typed (12-hour or 24-hour) and shown in 12-hour form in the event's own time zone (the `time_zone` in its `Timing`), and the review names it, e.g. "25 Nov 2026, 10:00 AM". An all-day event changed to timed uses the device's zone. Calls `set_timing`, unless the timing is unchanged. For one occurrence (3b), Current is the occurrence's own time, there's no Until limit, and it calls `change_occurrence`. |
 | Change to all-day or timed (UI: see 10) | `timing` | A picker like the event-type picker (Timed / All-day, with the current timing in the first option's subtitle), then the matching timing flow. |
 | Change category or privacy (UI: see 11) | `category`, `private` | A one-step radio page: Personal / Work, or Not private / Private. The radio always starts on its first option, so the current value is shown as that option's subtitle. Calls `set_category` or `set_private`. |
 | Change repeat (UI: see 15) | `recurrence` | See `Recurrence`. |
@@ -1015,13 +1021,13 @@ ownership and permissions model.
 
 | View | Shows |
 |------|-------|
-| Month | chk has no grid component, so it's a list, not a grid: one section per month, for 13 months from `Event::window_start()` (so a date nearly a year ahead is on screen), and one row per day with the day number, the weekday and a summary on the right. A day with one event shows its start time (or "All day") and title, e.g. "09:30 Standup", even after it has ended. On a later day of a timed event that started earlier, the start also shows its date, e.g. "23:00 (15 Nov) Night shift" (chk may cut it off). The category isn't shown: chk's right-hand text is one line and drops what doesn't fit; the Day view shows the category. Today is marked with a dot and "Today" in the subtitle, and is `Timing::today()` (the current date in the viewer's time zone). A multi-day event appears on every day it covers. Tapping a day opens its Day view, including empty and past days. Every row shows a chevron, because chk shows one on any row with a flow. The root's one header icon is free (UI: see 01, 19). |
+| Month | chk has no grid component, so it's a list, not a grid: one section per month, for 13 months from `Event::window_start()` (so a date nearly a year ahead is on screen), and one row per day with the day number, the weekday and a summary on the right. A day with one event shows its start time (or "All day") and title, e.g. "9:30 AM Standup", even after it has ended. On a later day of a timed event that started earlier, the start also shows its date, e.g. "11:00 PM (15 Nov) Night shift" (chk may cut it off). The category isn't shown: chk's right-hand text is one line and drops what doesn't fit; the Day view shows the category. Today is marked with a dot and "Today" in the subtitle, and is `Timing::today()` (the current date in the viewer's time zone). A multi-day event appears on every day it covers. Tapping a day opens its Day view, including empty and past days. Every row shows a chevron, because chk shows one on any row with a flow. The root's one header icon is free (UI: see 01, 19). |
 | Day | Every occurrence on one day, from `Calendar::on`: all-day events first, then the rest by start time. It's a list, not an hour grid. The page title is the short date, e.g. "Wed 25 Nov" (chk cuts longer titles). Each row shows the title, the category label (with the location, or that it repeats), and the time in the viewer's time zone (with the date too if it starts or ends on another day). Tapping a row opens the event detail page, which has edit and delete. Editing or deleting an occurrence of a repeating event asks Which Events?: This occurrence or Whole series (UI: see 16). A day with no events (including one opened empty from the month, or after deleting or cancelling the last event while its page is open) shows "No events on this day." On today and later days (`Timing::today()`), a **Create Event** bumper opens the new-event flow starting on that day; on an empty such day the button sits under that message. A past day has no button. A display page can't swipe, so going to another day means going back to the month (UI: see 18). |
 
 **Month summary for a day with several events.** The row shows the first timed
 event that hasn't ended yet (an event in progress stays shown until it ends).
-For example, with Foo at 09:00 for 30 minutes and Bar at 14:00, the row shows
-Foo at 09:15 and Bar at 11:00. If no timed event is left, today and later days
+For example, with Foo at 9:00 AM for 30 minutes and Bar at 2:00 PM, the row shows
+Foo at 9:15 AM and Bar at 11:00 AM. If no timed event is left, today and later days
 show the first all-day event; an all-day event counts as not ended for its
 whole day, but never hides a timed event that hasn't ended. Once every event
 that day has ended, the row shows "N events". A day with only one event still
@@ -1033,9 +1039,10 @@ app is open (UI: see 01, 19).
 
 chk's `ListItem` right-hand text is one line, about 153 pt wide on an iPhone
 17, with no ellipsis, so longer values are cut off with nothing to say they
-were. A continuation label such as "23:00 (15 Nov) Night shift" may show as
-"23:00 (15 No", and a Day-view time such as "23:00 (15 Nov)–01:00" may show as
-"23:00 (". A one-line `fit()` title on the left of a `ListItem` can be cut to
+were. A continuation label such as "11:00 PM (15 Nov) Night shift" may show as
+"11:00 PM (15 No", a first-day Day range such as "11:00 PM–1:00 AM (16 Nov)"
+as "11:00 PM–1:00", and the next day's "11:00 PM (15 Nov)–1:00 AM" as
+"11:00 PM (". A one-line `fit()` title on the left of a `ListItem` can be cut to
 its first letter: the Day-view title "Rep link" has been drawn as "R".
 Link values in tables get cut at `/`: `https://paste.example/room` shows as
 `https://paste.example/`, the same one-line issue. Keeping the month list's
@@ -1105,9 +1112,13 @@ doesn't decide yet. The open questions in sections 2 and 4 still stand.
   picked (UI: see 04). From a Day view (2026-11-20), Date / First Day is
   skipped and the start is that day's full `NaiveDate`, so a day in the 13th
   month keeps its year.
-- **12-hour AM/PM display.** Times are stored and typed as 24-hour `HH:MM`
-  (`Event::time`, chrono). Still open: show and type them as 12-hour AM/PM?
-  Storage would stay chrono, so only the display and the input would change.
+- **12-hour AM/PM display.** Decided 2026-11-20: every time shown to the
+  user is 12-hour `h:mm AM/PM` (`Timing::format_time`, `"%-I:%M %p"`).
+  Start Time and End Time are text steps (placeholder "9:30 AM") that
+  accept 12-hour forms (`9:30 AM`, `9:30pm`, `9am`) and 24-hour `21:30`
+  (`Event::time`); invalid input shows "Use 9:30 AM or 21:30." Storage
+  stays chrono (`NaiveTime` / `NaiveDateTime`) and the contract stays
+  `CoconutCalendarV3`.
 - **Quick create, search, schedule view.** Are any of these wanted early? The
   month root's one header icon is free and could open Search or "Go to date"
   (UI: see 19).
