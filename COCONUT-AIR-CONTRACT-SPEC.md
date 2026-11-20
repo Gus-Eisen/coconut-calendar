@@ -478,7 +478,8 @@ compare with a rule a form built).
 | -------- | ----------- | -------------- |
 | `device_zone` | `fn device_zone() -> Tz` | The device's time zone, or UTC if the device reports one that `chrono-tz` doesn't recognise. |
 | `today` | `fn today() -> NaiveDate` | Today's date in the device's time zone (`device_zone`). `Event::window_start` (still in the API) is the first day of this month; `Event::date` reads a `DD-MM` on or after today; Change repeat's Until earliest is `max(start, today)`; the month's Today marker and the Day view's Create Event button (today or later) also use it. |
-| `format_time` | `fn format_time(time: NaiveTime) -> String` | A clock time as 12-hour `h:mm AM/PM` (`"%-I:%M %p"`): "9:30 AM", midnight "12:00 AM", noon "12:00 PM". Every user-facing time uses this. |
+| `format_time` | `fn format_time(time: NaiveTime) -> String` | A clock time as 12-hour `h:mm AM/PM` (`"%-I:%M %p"`): "9:30 AM", midnight "12:00 AM", noon "12:00 PM". Used in review tables, save confirmations, and `EventScreen::when`, where full minutes avoid ambiguity. |
+| `format_short_time` | `fn format_short_time(time: NaiveTime) -> String` | A list row's time: drops ":00" on the hour (`"%-I %p"`, e.g. "11 PM", "12 AM"), otherwise the same as `format_time` (`"%-I:%M %p"`, e.g. "9:30 PM"). |
 | `is_valid` | `fn is_valid(&self) -> bool` | `AllDay`: `last_day` is on or after `first_day`. `Timed`: both times can be worked out in `time_zone`, and `end` is after `start`. `apply` and both forms use this one rule. |
 | `from_times` | `fn from_times(date: NaiveDate, start: NaiveTime, end: NaiveTime, time_zone: Tz) -> Option<Timing>` | The regular form's timing: ends on `date`, or the next day if `end` is earlier than `start`. `None` if they're equal. Callers still check `is_valid`. |
 | `from_states` | `fn from_states(states: &[State], time_zone: Tz) -> Timing` | Reads a form's Date or First Day with `Event::date`, then the rest with `from_start`. Used by the month's Create Event and by Change time. The form checks the inputs first, so this panics if they're invalid. |
@@ -570,9 +571,28 @@ Repeating all-day 10. From the month they stay 8, 7, 12 and 11.
   the last day if it's different). Done returns to where Create Event was
   tapped: the month, or the Day view (UI: see 06).
 
-`DayScreen::time_label(timing, day, zone) -> String` is how the views show an
-occurrence's time: "All day", or the start and end in `zone`. Any part that isn't on
-`day` also shows its date, e.g. "11:00 PM–1:00 AM (16 Nov)".
+`DayScreen::time_label(timing, day, zone) -> String` is the Day view's time in
+`zone`, using `format_short_time`: "All day"; a same-day range such as
+"9:30 PM–10 PM"; "from 11 PM" on the first day of an overnight event;
+"until 1 AM" on the last; or "until 6 Dec" on a middle day. It is private
+to `month.rs`. The month row (`MonthScreen::summary`) uses the same short
+times: "{start} {title}" on the start day (e.g. "11 PM Night"), "until {end}
+{title}" on the day it ends (e.g. "until 1 AM Night"), or "until {d Mon}
+{title}" on a middle day (e.g. "until 6 Dec Trip").
+
+`DayScreen::fit_label(ctx, theme, text) -> String` shortens a month or Day
+row label to fit one column, ending in "…" (U+2026) when it was cut. It
+measures with the renderer's own layout in the row font (`FontStyle::Heading`,
+`TextSize::H5`). The column width is `((window width min 423) − 48 padding −
+32 forward icon − 8 gap) / 2`, then minus 2 pt so the renderer rounding
+widths up still fits. If that width is 0 or the theme has no Heading font,
+the text is left unchanged. Month summaries, Day-view titles and Day-view
+times all go through it.
+
+`EventScreen::when` is the detail page's Time row: the full `format_time`
+range, with " (d Mon)" on an end that falls on another day, then the start
+date, e.g. "11:00 PM–1:00 AM (26 Nov), Tue 25 Nov". It does not use
+`time_label`. Review tables and save messages also keep `format_time`.
 
 ### Methods on `Calendar`
 
@@ -1021,8 +1041,8 @@ ownership and permissions model.
 
 | View | Shows |
 |------|-------|
-| Month | chk has no grid component, so it's a list, not a grid: one section per month, for 13 months from `Event::window_start()` (so a date nearly a year ahead is on screen), and one row per day with the day number, the weekday and a summary on the right. A day with one event shows its start time (or "All day") and title, e.g. "9:30 AM Standup", even after it has ended. On a later day of a timed event that started earlier, the start also shows its date, e.g. "11:00 PM (15 Nov) Night shift" (chk may cut it off). The category isn't shown: chk's right-hand text is one line and drops what doesn't fit; the Day view shows the category. Today is marked with a dot and "Today" in the subtitle, and is `Timing::today()` (the current date in the viewer's time zone). A multi-day event appears on every day it covers. Tapping a day opens its Day view, including empty and past days. Every row shows a chevron, because chk shows one on any row with a flow. The root's one header icon is free (UI: see 01, 19). |
-| Day | Every occurrence on one day, from `Calendar::on`: all-day events first, then the rest by start time. It's a list, not an hour grid. The page title is the short date, e.g. "Wed 25 Nov" (chk cuts longer titles). Each row shows the title, the category label (with the location, or that it repeats), and the time in the viewer's time zone (with the date too if it starts or ends on another day). Tapping a row opens the event detail page, which has edit and delete. Editing or deleting an occurrence of a repeating event asks Which Events?: This occurrence or Whole series (UI: see 16). A day with no events (including one opened empty from the month, or after deleting or cancelling the last event while its page is open) shows "No events on this day." On today and later days (`Timing::today()`), a **Create Event** bumper opens the new-event flow starting on that day; on an empty such day the button sits under that message. A past day has no button. A display page can't swipe, so going to another day means going back to the month (UI: see 18). |
+| Month | chk has no grid component, so it's a list, not a grid: one section per month, for 13 months from `Event::window_start()` (so a date nearly a year ahead is on screen), and one row per day with the day number, the weekday and a summary on the right. A day with one event shows its start time (or "All day") and title, e.g. "9:30 AM Standup" or "11 PM Night", even after it has ended. On a later day of a timed event that started earlier, the summary shows when it ends today, e.g. "until 1 AM Night shift", or "until 6 Dec Trip" on a middle day. Long summaries are shortened with "…" to fit the row (`DayScreen::fit_label`). The category isn't shown: the right-hand text is one line; the Day view shows the category. Today is marked with a dot and "Today" in the subtitle, and is `Timing::today()` (the current date in the viewer's time zone). A multi-day event appears on every day it covers. Tapping a day opens its Day view, including empty and past days. Every row shows a chevron, because chk shows one on any row with a flow. The root's one header icon is free (UI: see 01, 19). |
+| Day | Every occurrence on one day, from `Calendar::on`: all-day events first, then the rest by start time. It's a list, not an hour grid. The page title is the short date, e.g. "Wed 25 Nov" (chk cuts longer titles). Each row shows the title, the category label (with the location, or that it repeats), and the time in the viewer's time zone (`DayScreen::time_label`: "9:30 PM–10 PM" on one day, "from 11 PM" on the first day of an overnight event, "until 1 AM" on the last, or "until 6 Dec" on a middle day). The title and the time are shortened with "…" to fit (`DayScreen::fit_label`). Tapping a row opens the event detail page, which has edit and delete. Editing or deleting an occurrence of a repeating event asks Which Events?: This occurrence or Whole series (UI: see 16). A day with no events (including one opened empty from the month, or after deleting or cancelling the last event while its page is open) shows "No events on this day." On today and later days (`Timing::today()`), a **Create Event** bumper opens the new-event flow starting on that day; on an empty such day the button sits under that message. A past day has no button. A display page can't swipe, so going to another day means going back to the month (UI: see 18). |
 
 **Month summary for a day with several events.** The row shows the first timed
 event that hasn't ended yet (an event in progress stays shown until it ends).
@@ -1031,25 +1051,35 @@ Foo at 9:15 AM and Bar at 11:00 AM. If no timed event is left, today and later d
 show the first all-day event; an all-day event counts as not ended for its
 whole day, but never hides a timed event that hasn't ended. Once every event
 that day has ended, the row shows "N events". A day with only one event still
-shows that event's time and title, even after it has ended. The summary is the
-chosen event's start time (or "All day") and title only, as for a one-event
-day; nothing is appended (no "+N"). The row only updates when the page
+shows that event's time and title, even after it has ended. The summary uses
+the same labels as a one-event day (start time or "All day", or "until …" on
+a later day of a timed event, and the title); nothing is appended (no "+N").
+Long summaries are shortened with "…". The row only updates when the page
 rebuilds (a relaunch or any calendar change), not when an event ends while the
 app is open (UI: see 01, 19).
 
-chk's `ListItem` right-hand text is one line, about 153 pt wide on an iPhone
-17, with no ellipsis, so longer values are cut off with nothing to say they
-were. A continuation label such as "11:00 PM (15 Nov) Night shift" may show as
-"11:00 PM (15 No", a first-day Day range such as "11:00 PM–1:00 AM (16 Nov)"
-as "11:00 PM–1:00", and the next day's "11:00 PM (15 Nov)–1:00 AM" as
-"11:00 PM (". A one-line `fit()` title on the left of a `ListItem` can be cut to
-its first letter: the Day-view title "Rep link" has been drawn as "R".
-Link values in tables get cut at `/`: `https://paste.example/room` shows as
-`https://paste.example/`, the same one-line issue. Keeping the month list's
-scroll position across a rebuild needs an upstream chk change:
-`Listener::on_change` should carry over the `Scrollable` offset, as it
-already does for a `MessagesPage` input. There is no known way to open a
-link from chk yet. These are with chk's developer.
+Month and Day list rows no longer clip mid-letter: `DayScreen::fit_label`
+measures the text with the renderer's layout (Heading, H5) and shortens it
+to the column width with a trailing "…" (U+2026). The width is
+`((window width, at most 423 pt) − 48 pt padding − 32 pt forward icon − 8 pt
+gap) / 2`, minus 2 pt so the renderer rounding widths up still fits (155 pt
+on a 402 pt iPhone 17). Overnight row labels are also shorter now, so
+"11 PM Night", "until 1 AM Night", "from 11 PM" and "until 1 AM" fit in
+full; a long title such as "Quarterly Architecture Review Sync" has been
+drawn as "10 AM Quarterly A…" on the month and "Quarterly Architec…" on the
+Day view.
+
+Review and detail tables still clip mid-letter, with no ellipsis: a long
+title has shown as "Quarterly Architectu", and an overnight Time row
+"11:00 PM–1:00 AM (7 Dec), Sun 6 Dec" as "11:00 PM–1:00 AM (7 Dec".
+Link values in tables still get cut at `/`: `https://paste.example/room`
+shows as `https://paste.example/`. Keeping the month list's scroll position
+across a rebuild needs an upstream chk change: `Listener::on_change` should
+carry over the `Scrollable` offset, as it already does for a `MessagesPage`
+input. There is no known way to open a link from chk yet. The table clipping,
+scroll position and links are with chk's developer. wgpu_prism's one-line
+ellipsis is also still wrong (it draws "…" outside the row); list rows no
+longer rely on it.
 
 ### Order of work
 
@@ -1113,12 +1143,14 @@ doesn't decide yet. The open questions in sections 2 and 4 still stand.
   skipped and the start is that day's full `NaiveDate`, so a day in the 13th
   month keeps its year.
 - **12-hour AM/PM display.** Decided 2026-11-20: every time shown to the
-  user is 12-hour `h:mm AM/PM` (`Timing::format_time`, `"%-I:%M %p"`).
-  Start Time and End Time are text steps (placeholder "9:30 AM") that
-  accept 12-hour forms (`9:30 AM`, `9:30pm`, `9am`) and 24-hour `21:30`
-  (`Event::time`); invalid input shows "Use 9:30 AM or 21:30." Storage
-  stays chrono (`NaiveTime` / `NaiveDateTime`) and the contract stays
-  `CoconutCalendarV3`.
+  user is 12-hour. Review tables, save messages and the detail Time row
+  use `Timing::format_time` (`"%-I:%M %p"`, e.g. "9:30 AM", "11:00 PM").
+  List rows use `Timing::format_short_time`, which drops ":00" on the hour
+  ("11 PM", "9:30 PM"). Start Time and End Time are text steps
+  (placeholder "9:30 AM") that accept 12-hour forms (`9:30 AM`, `9:30pm`,
+  `9am`) and 24-hour `21:30` (`Event::time`); invalid input shows
+  "Use 9:30 AM or 21:30." Storage stays chrono (`NaiveTime` /
+  `NaiveDateTime`) and the contract stays `CoconutCalendarV3`.
 - **Quick create, search, schedule view.** Are any of these wanted early? The
   month root's one header icon is free and could open Search or "Go to date"
   (UI: see 19).
@@ -1173,8 +1205,11 @@ doesn't decide yet. The open questions in sections 2 and 4 still stand.
   Day is skipped and the start is that day. Every month row is tappable and
   shows a chevron, including empty and past days, because chk shows a chevron
   on any row with a flow. A past Day view has no button.
-- **Ellipsis.** chk's one-line text has no ellipsis (see the notes for chk's developer).
-  Still open: should Coconut add its own ellipsis by measuring text width?
+- **Ellipsis.** Decided 2026-11-20: month and Day list rows measure text
+  with the renderer's layout and shorten it with "…" (`DayScreen::fit_label`;
+  see the views in section 5). Still open: review and detail tables still
+  clip mid-letter. chk's own one-line ellipsis is still drawn outside the
+  row (see the notes for chk's developer).
 
 **Invites and proposals**
 
