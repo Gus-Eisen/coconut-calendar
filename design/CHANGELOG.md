@@ -37,8 +37,12 @@ them into the next design version instead.
   Start Time, End Time, Location, Info; an earlier End Time means the next day, an equal
   one is an error. v1's note says "step 6 of 8"; it should be "step 5 of 7". The
   Repeating form drops End Date too. (2026-11-16)
-- **01 Month (home):** the spec's month row shows the start time only, as on 19
-  ("09:30 Standup · Work"), not 01's start and end. (2026-11-16)
+- **01 Month (home):** the spec's month row shows the start time only, not 01's
+  start and end. (2026-11-16)
+- **01, 18, 19 Views:** the month row shows time and title only, with no
+  category (v1 19 shows "09:30 Standup · Work"). Future days with several
+  events show the first event, not 19's "2 events". The Day title is the short
+  date, e.g. "Wed 25 Nov", not 18's "Tuesday 3 November". (2026-11-20)
 - **01 Month and 04 All-day form:** the month list runs 13 months, not 12, and a `DD-MM`
   date means the first such date on or after today, not "from the 1st of this month".
   Last Day (and Change time's End Date on 09) is the first such date on or after the start,

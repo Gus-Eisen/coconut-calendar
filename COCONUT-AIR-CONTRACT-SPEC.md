@@ -463,9 +463,12 @@ one:
 | `dropped` | `fn dropped(&self, timing: &Timing, recurrence: Option<&Recurrence>) -> usize` | How many exceptions `apply` would drop if the series became `timing` with `recurrence` (`None`: all of them). For the reviews' warning line. |
 | `dropped_by_timing` | `fn dropped_by_timing(&self, timing: &Timing) -> usize` | `dropped` for a whole-series Change time, whose rule follows the new start as in `SetTiming`. |
 
-`Override` has getters `title`, `timing` and `attachments`, `is_empty`
-(nothing differs), and one setter per field that also takes the series' value
-and stores `None` when they're equal (e.g. `set_title`, `set_timing`).
+`Override` has getters `title`, `timing`, `location`, `info`, `video_link`
+and `attachments`, `is_empty` (nothing differs), and one setter per field that
+also takes the series' value and stores `None` when they're equal (e.g.
+`set_title`, `set_timing`). `location`, `info` and `video_link` return
+`Option<Option<&str>>`: `None` means "same as the series", and `Some(None)`
+means "cleared".
 `Recurrence` has `exceptions()` and `rule()` (a copy without exceptions, to
 compare with a rule a form built).
 
@@ -715,7 +718,7 @@ split:
 | Change time (UI: see 09) | `timing` | A flow: Date, Start Time, End Date, End Time, then a review showing the current and new times. Step titles are plain ("Start Time", "End Time"): chk clips longer ones. Date is on or after today; End Date uses the same rule as Last Day (on or after the start, at most 28 days later). Times are typed and shown in the event's own time zone (the `time_zone` in its `Timing`), and the review names it. An all-day event changed to timed uses the device's zone. Calls `set_timing`, unless the timing is unchanged. For one occurrence (3b), Current is the occurrence's own time, there's no Until limit, and it calls `change_occurrence`. |
 | Change to all-day or timed (UI: see 10) | `timing` | A picker like the event-type picker (Timed / All-day, with the current timing in the first option's subtitle), then the matching timing flow. |
 | Change category or privacy (UI: see 11) | `category`, `private` | A one-step radio page: Personal / Work, or Not private / Private. The radio always starts on its first option, so the current value is shown as that option's subtitle. Calls `set_category` or `set_private`. |
-| Add attachment link (UI: see 12) | `attachments` | A text step with a Paste action. Calls `add_attachment`. Each link on the detail page has a Delete action (`remove_attachment`). No file upload. For one occurrence (3b), its list is its own if it has one, else the series'; adding or deleting sets the whole list with `change_occurrence`. |
+| Add attachment link (UI: see 12) | `attachments` | A text step with a Paste action. Calls `add_attachment`. Each link on the detail page has a Delete action (`remove_attachment`). No file upload. For one occurrence (3b), its list is its own if it has one, else the series'; adding or deleting sets the whole list with `change_occurrence`. Delete > Whole series removes the link from the series and, if the tapped occurrence has its own list, from that list too (restoring the occurrence if nothing else differs). Other occurrences' own lists keep it. |
 | Change repeat (UI: see 15) | `recurrence` | See `Recurrence`. |
 
 Delete on an event that doesn't repeat, and Delete > Whole series, have no
@@ -988,14 +991,29 @@ ownership and permissions model.
 
 | View | Shows |
 |------|-------|
-| Month | chk has no grid component, so it's a list, not a grid: one section per month, for 13 months from `Event::window_start()` (so a date nearly a year ahead is on screen), and one row per day with the day number, the weekday and a summary on the right. A day with one event shows its time (or "All day"), title and category label, e.g. "09:30 Standup · Work". Today is marked with a dot and "Today" in the subtitle. A multi-day event appears on every day it covers. Tapping a day with events opens the day view. The root's one header icon is free (UI: see 01, 19). |
-| Day | Every occurrence on one day, from `Calendar::on`: all-day events first, then the rest by start time. It's a list, not an hour grid. Each row shows the title, the category label (with the location, or that it repeats), and the time in the viewer's time zone (with the date too if it starts or ends on another day). Tapping a row opens the event detail page, which has edit and delete. Editing or deleting an occurrence of a repeating event asks Which Events?: This occurrence or Whole series (UI: see 16). A display page can't swipe, so going to another day means going back to the month (UI: see 18). |
+| Month | chk has no grid component, so it's a list, not a grid: one section per month, for 13 months from `Event::window_start()` (so a date nearly a year ahead is on screen), and one row per day with the day number, the weekday and a summary on the right. A day with one event shows its start time (or "All day") and title, e.g. "09:30 Standup", even after it has ended. On a later day of a timed event that started earlier, the start also shows its date, e.g. "23:00 (15 Nov) Night shift" (chk may cut it off). The category isn't shown: chk's right-hand text is one line and drops what doesn't fit; the Day view shows the category. Today is marked with a dot and "Today" in the subtitle, and is the current date in the viewer's time zone. A multi-day event appears on every day it covers. Tapping a day with events opens the day view. The root's one header icon is free (UI: see 01, 19). |
+| Day | Every occurrence on one day, from `Calendar::on`: all-day events first, then the rest by start time. It's a list, not an hour grid. The page title is the short date, e.g. "Wed 25 Nov" (chk cuts longer titles). Each row shows the title, the category label (with the location, or that it repeats), and the time in the viewer's time zone (with the date too if it starts or ends on another day). Tapping a row opens the event detail page, which has edit and delete. Editing or deleting an occurrence of a repeating event asks Which Events?: This occurrence or Whole series (UI: see 16). A day with no events left (for example after deleting or cancelling the last one while its page is open) shows "No events on this day." A display page can't swipe, so going to another day means going back to the month (UI: see 18). |
 
-**Month summary for a day with several events (planned, likely step 4).** The
-row shows the next event that hasn't ended yet. An event that's in progress
-stays shown until it ends. For example, with Foo at 09:00 for 30 minutes and
-Bar at 14:00, the row shows Foo at 09:15 and Bar at 11:00. Until this is built,
-such a day shows "N events" (UI: see 01, 19).
+**Month summary for a day with several events.** The row shows the first timed
+event that hasn't ended yet (an event in progress stays shown until it ends).
+For example, with Foo at 09:00 for 30 minutes and Bar at 14:00, the row shows
+Foo at 09:15 and Bar at 11:00. If no timed event is left, today and later days
+show the first all-day event; an all-day event counts as not ended for its
+whole day, but never hides a timed event that hasn't ended. Once every event
+that day has ended, the row shows "N events". A day with only one event still
+shows that event's time and title, even after it has ended. The summary is the
+chosen event's start time (or "All day") and title only, as for a one-event
+day; nothing is appended (no "+N"). The row only updates when the page
+rebuilds (a relaunch or any calendar change), not when an event ends while the
+app is open (UI: see 01, 19).
+
+chk's `ListItem` right-hand text is one line, about 153 pt wide on an iPhone
+17, with no ellipsis, so longer values are cut off with nothing to say they
+were. A continuation label such as "23:00 (15 Nov) Night shift" may show as
+"23:00 (15 No", and a Day-view time such as "23:00 (15 Nov)–01:00" may show as
+"23:00 (". Keeping the month list's scroll position across a rebuild needs an
+upstream chk change: `Listener::on_change` should carry over the `Scrollable`
+offset, as it already does for a `MessagesPage` input. Both are with chk's developer.
 
 ### Order of work
 
@@ -1016,8 +1034,8 @@ change *where* events are sent, not what an `Event` is.
    `restore_occurrence`, the Which Events? step and Restore (UI: see 16, 17).
    `SplitSeries` ("This and following") moves later; `DetachOccurrence` moves
    to step 6 (invites).
-4. Views: day and month, including the month summary for days with several
-   events (UI: see 18, 19).
+4. Views (done, 2026-11-20): day and month, including the month summary for
+   days with several events (UI: see 18, 19).
 5. Attribution and roles, and the People tab (UI: see 20–23).
 6. Invites and time proposals, and the Invites tab. A test of
    `Instance::share` between two identities comes first (UI: see 24–29).
@@ -1088,9 +1106,14 @@ doesn't decide yet. The open questions in sections 2 and 4 still stand.
 
 **Views**
 
-- **Month summary after the day's events have ended.** With the planned
-  next-event rule, what does the row show once every event that day has ended?
-  And does an all-day event count as not ended for the whole day?
+- **Month summary after the day's events have ended.** Decided 2026-11-20:
+  once every event on a day with several events has ended, the row shows
+  "N events"; a day with one event keeps its summary. An all-day event counts
+  as not ended for its whole day, but shows only when no unended timed event
+  is left. Future multi-event days follow the same rule (the first event, not
+  the mockup's "2 events"), with no "+N". Refreshing when an event ends while
+  the app is open is deferred until chk keeps the scroll position. The Day
+  subtitle stays "Repeats".
 
 **Invites and proposals**
 
