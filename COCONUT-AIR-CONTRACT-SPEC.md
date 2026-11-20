@@ -283,7 +283,7 @@ form:
 **Changing how it repeats** (`set_recurrence`, UI: see 15) is a flow of
 Repeats (with an eighth option, **Doesn't repeat**, last), Every, Until and
 Times, then a "Change Repeat Review" with Current and New tables of the rows
-above. Until is read from the later of the event's start date and today.
+above. Until is read from the later of the event's start date and `Timing::today()`.
 Continue sends `set_recurrence` unless the rule is unchanged (compared without
 exceptions, since the form's rule never has any), and returns to the detail
 page. As with changing the time, the current value can only appear on the
@@ -441,8 +441,8 @@ Helpers for the new-event forms:
 
 | Method | Signature | What it does |
 | -------- | ----------- | -------------- |
-| `window_start` | `fn window_start() -> NaiveDate` | The first day of the current month, where the month list starts. |
-| `date` | `fn date(input: &str) -> Option<NaiveDate>` | Reads a `DD-MM` date as the first such date on or after today: `date_from(input, today)`. Used for every first date (Date, First Day). `None` if the input isn't a valid date. |
+| `window_start` | `fn window_start() -> NaiveDate` | The first day of `Timing::today()`'s month, where the month list starts. |
+| `date` | `fn date(input: &str) -> Option<NaiveDate>` | Reads a `DD-MM` date as the first such date on or after today (`Timing::today()`): `date_from(input, today)`. Used for every first date (Date, First Day). `None` if the input isn't a valid date. |
 | `date_from` | `fn date_from(input: &str, earliest: NaiveDate) -> Option<NaiveDate>` | Reads a `DD-MM` date as the first such date on or after `earliest`: it tries `earliest`'s year, then the next year. `None` if neither gives a valid date on or after `earliest` (e.g. `29-02` when the next 29 February is more than a year away). |
 | `time` | `fn time(input: &str) -> Option<NaiveTime>` | Reads an `HH:MM` time (24-hour). `None` if invalid. |
 | `from_states` | `fn from_states(states: &[State], day: Option<NaiveDate>) -> Event` | Builds an `Event` from any new-event form's inputs, in the device's time zone. All four forms end with Location, Info and Link; those are stored with `optional`. With `Some(day)` (the Day view's Create Event), the form skipped Date / First Day and the event starts on `day`, via `Timing::from_start`. With `None` (the month's Create Event), it reads Date / First Day with `Timing::from_states`. Sets `deleted: false`. The form checks the inputs first, so this panics if they're invalid. It only ever reads form inputs, never AIR data. |
@@ -477,6 +477,7 @@ compare with a rule a form built).
 | Method | Signature | What it does |
 | -------- | ----------- | -------------- |
 | `device_zone` | `fn device_zone() -> Tz` | The device's time zone, or UTC if the device reports one that `chrono-tz` doesn't recognise. |
+| `today` | `fn today() -> NaiveDate` | Today's date in the device's time zone (`device_zone`). `Event::window_start` (still in the API) is the first day of this month; `Event::date` reads a `DD-MM` on or after today; Change repeat's Until earliest is `max(start, today)`; the month's Today marker and the Day view's Create Event button (today or later) also use it. |
 | `is_valid` | `fn is_valid(&self) -> bool` | `AllDay`: `last_day` is on or after `first_day`. `Timed`: both times can be worked out in `time_zone`, and `end` is after `start`. `apply` and both forms use this one rule. |
 | `from_times` | `fn from_times(date: NaiveDate, start: NaiveTime, end: NaiveTime, time_zone: Tz) -> Option<Timing>` | The regular form's timing: ends on `date`, or the next day if `end` is earlier than `start`. `None` if they're equal. Callers still check `is_valid`. |
 | `from_states` | `fn from_states(states: &[State], time_zone: Tz) -> Timing` | Reads a form's Date or First Day with `Event::date`, then the rest with `from_start`. Used by the month's Create Event and by Change time. The form checks the inputs first, so this panics if they're invalid. |
@@ -498,8 +499,8 @@ can't be worked out, they panic.
 ### The new-event forms
 
 The month screen has one button, **Create Event** (UI: see 01). Today and
-later Day views have the same button at the bottom (today in
-`Timing::device_zone()`). On an empty such day it sits under the centred
+later Day views have the same button at the bottom (today from
+`Timing::today()`). On an empty such day it sits under the centred
 "No events on this day." A past day has no button (UI: see 18).
 
 Either button opens the same **event-type picker**: a one-step `Form::flow`
@@ -1014,8 +1015,8 @@ ownership and permissions model.
 
 | View | Shows |
 |------|-------|
-| Month | chk has no grid component, so it's a list, not a grid: one section per month, for 13 months from `Event::window_start()` (so a date nearly a year ahead is on screen), and one row per day with the day number, the weekday and a summary on the right. A day with one event shows its start time (or "All day") and title, e.g. "09:30 Standup", even after it has ended. On a later day of a timed event that started earlier, the start also shows its date, e.g. "23:00 (15 Nov) Night shift" (chk may cut it off). The category isn't shown: chk's right-hand text is one line and drops what doesn't fit; the Day view shows the category. Today is marked with a dot and "Today" in the subtitle, and is the current date in the viewer's time zone. A multi-day event appears on every day it covers. Tapping a day opens its Day view, including empty and past days. Every row shows a chevron, because chk shows one on any row with a flow. The root's one header icon is free (UI: see 01, 19). |
-| Day | Every occurrence on one day, from `Calendar::on`: all-day events first, then the rest by start time. It's a list, not an hour grid. The page title is the short date, e.g. "Wed 25 Nov" (chk cuts longer titles). Each row shows the title, the category label (with the location, or that it repeats), and the time in the viewer's time zone (with the date too if it starts or ends on another day). Tapping a row opens the event detail page, which has edit and delete. Editing or deleting an occurrence of a repeating event asks Which Events?: This occurrence or Whole series (UI: see 16). A day with no events (including one opened empty from the month, or after deleting or cancelling the last event while its page is open) shows "No events on this day." On today and later days (today in `device_zone`), a **Create Event** bumper opens the new-event flow starting on that day; on an empty such day the button sits under that message. A past day has no button. A display page can't swipe, so going to another day means going back to the month (UI: see 18). |
+| Month | chk has no grid component, so it's a list, not a grid: one section per month, for 13 months from `Event::window_start()` (so a date nearly a year ahead is on screen), and one row per day with the day number, the weekday and a summary on the right. A day with one event shows its start time (or "All day") and title, e.g. "09:30 Standup", even after it has ended. On a later day of a timed event that started earlier, the start also shows its date, e.g. "23:00 (15 Nov) Night shift" (chk may cut it off). The category isn't shown: chk's right-hand text is one line and drops what doesn't fit; the Day view shows the category. Today is marked with a dot and "Today" in the subtitle, and is `Timing::today()` (the current date in the viewer's time zone). A multi-day event appears on every day it covers. Tapping a day opens its Day view, including empty and past days. Every row shows a chevron, because chk shows one on any row with a flow. The root's one header icon is free (UI: see 01, 19). |
+| Day | Every occurrence on one day, from `Calendar::on`: all-day events first, then the rest by start time. It's a list, not an hour grid. The page title is the short date, e.g. "Wed 25 Nov" (chk cuts longer titles). Each row shows the title, the category label (with the location, or that it repeats), and the time in the viewer's time zone (with the date too if it starts or ends on another day). Tapping a row opens the event detail page, which has edit and delete. Editing or deleting an occurrence of a repeating event asks Which Events?: This occurrence or Whole series (UI: see 16). A day with no events (including one opened empty from the month, or after deleting or cancelling the last event while its page is open) shows "No events on this day." On today and later days (`Timing::today()`), a **Create Event** bumper opens the new-event flow starting on that day; on an empty such day the button sits under that message. A past day has no button. A display page can't swipe, so going to another day means going back to the month (UI: see 18). |
 
 **Month summary for a day with several events.** The row shows the first timed
 event that hasn't ended yet (an event in progress stays shown until it ends).
