@@ -87,7 +87,7 @@ impl MonthScreen {
             Some((start, _)) if start.date() == day => start.format("%H:%M").to_string(),
             Some((start, _)) => start.format("%H:%M (%-d %b)").to_string(),
         };
-        Some(format!("{time} {} · {}", occurrence.title(), occurrence.event().category().label()))
+        Some(format!("{time} {}", occurrence.title()))
     }
 }
 
@@ -122,7 +122,7 @@ impl DayScreen {
                     true => (Display::instructions("No events on this day."), Offset::Center),
                     false => (Display::list(None, rows, None), Offset::Start),
                 };
-                let title = day.format("%A %-d %B").to_string();
+                let title = day.format("%a %-d %b").to_string();
                 PageType::display(&title, vec![items], None, Bumper::None, offset)
             },
         )])

@@ -1,7 +1,7 @@
 use chk::{Context, State};
 use chrono::{Datelike, Days, Local, NaiveDate, NaiveTime};
 use chrono_tz::Tz;
-use ramp::prism::air::{Contract, Id, Instance, Metadata};
+use ramp::prism::air::{Contract, Id, Instance, Metadata, Name};
 use serde::{Deserialize, Serialize};
 
 use std::collections::BTreeMap;
@@ -12,6 +12,38 @@ mod recurrence;
 pub use recurrence::*;
 mod exception;
 pub use exception::*;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Category {
+    Work,
+    Personal,
+}
+
+impl Category {
+    /// In the order the new-event form lists them; `Personal` first, as new events default to it.
+    pub fn options() -> [Category; 2] { [Category::Personal, Category::Work] }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Category::Work => "Work",
+            Category::Personal => "Personal",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Attendee {
+    name: Name,
+    response: Response,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Response {
+    Pending,
+    Accepted,
+    Declined,
+    Tentative,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Event {
