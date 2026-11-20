@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use crate::{Calendar, Event, EventId, Recurrence, Repeat, Timing};
 
-use super::EventScreen;
+use super::{DayScreen, EventScreen};
 use super::detail::Scope;
 
 /// Change time: a Timed / All-day picker, then that kind's steps and a Current / New review.
@@ -63,7 +63,8 @@ impl ChangeTime {
                         (Timing::device_zone(), steps)
                     }
                 };
-                Flow::from_form(Self::flow(theme, edit, zone, steps)).build(ctx, theme)(ctx, theme)
+                let form = Self::flow(theme, edit, zone, steps, ctx.window.area().size.0);
+                Flow::from_form(form).build(ctx, theme)(ctx, theme)
             }))
         }) as Box<dyn FormSubmit>;
 
@@ -75,15 +76,19 @@ impl ChangeTime {
     /// Continue sends `set_timing` (whole series) or `change_occurrence` (one occurrence)
     /// unless nothing changed, then goes back to the detail page. A whole-series review warns
     /// about single changes the new time drops.
-    fn flow(theme: &Theme, edit: Edit, zone: Tz, steps: Vec<FormItem>) -> Form {
+    fn flow(theme: &Theme, edit: Edit, zone: Tz, steps: Vec<FormItem>, width: f32) -> Form {
         let Edit { mut calendar, id, series, scope, current } = edit;
+        let review_theme = theme.clone();
         let review = move |states: &Vec<State>| {
             let new = Timing::from_states(states, zone);
             let dropped = match scope {
                 Scope::Series => series.dropped_by_timing(&new),
                 Scope::Occurrence(_) => 0,
             };
-            [Self::table("Current", &current), Self::table("New", &new)].into_iter()
+            let table = |label: &str, timing: &Timing| {
+                Self::table(label, timing, &review_theme, width)
+            };
+            [table("Current", &current), table("New", &new)].into_iter()
                 .chain(ChangeRepeat::warning(dropped))
                 .collect()
         };
@@ -126,9 +131,11 @@ impl ChangeTime {
         }
     }
 
-    fn table(label: &str, timing: &Timing) -> Display {
-        let rows = Self::rows(timing).into_iter()
-            .map(|(label, value)| TableItem::new(label, &value)).collect();
+    /// Values are cut to fit a window `width` wide.
+    fn table(label: &str, timing: &Timing, theme: &Theme, width: f32) -> Display {
+        let rows = Self::rows(timing).into_iter().map(|(label, value)| {
+            TableItem::new(label, &DayScreen::fit_label(theme, width, &value, true))
+        }).collect();
         Display::table(label, rows, None)
     }
 }
@@ -138,7 +145,7 @@ impl ChangeTime {
 /// in the past for a series that started earlier.
 pub struct ChangeRepeat;
 impl ChangeRepeat {
-    pub fn form(theme: &Theme, mut calendar: Instance<Calendar>, id: EventId, event: &Event) -> Form {
+    pub fn form(theme: &Theme, mut calendar: Instance<Calendar>, id: EventId, event: &Event, width: f32) -> Form {
         // Compared without exceptions, as the form's rule never has any.
         let current = event.recurrence().map(Recurrence::rule);
         let start = event.timing().start_date();
@@ -147,6 +154,7 @@ impl ChangeRepeat {
         let times = Rc::new(RefCell::new(times));
 
         let (review_current, series) = (current.clone(), event.clone());
+        let review_theme = theme.clone();
         let review = move |states: &Vec<State>| {
             let new = Recurrence::from_states(states, start, earliest);
             let dropped = match new == review_current {
@@ -154,8 +162,8 @@ impl ChangeRepeat {
                 false => series.dropped(series.timing(), new.as_ref()),
             };
             [
-                Self::table("Current", review_current.as_ref(), start),
-                Self::table("New", new.as_ref(), start),
+                Self::table("Current", review_current.as_ref(), start, &review_theme, width),
+                Self::table("New", new.as_ref(), start, &review_theme, width),
             ].into_iter().chain(Self::warning(dropped)).collect()
         };
         let submit = Box::new(move |_ctx: &mut Context, states: &Vec<State>| {
@@ -176,12 +184,14 @@ impl ChangeRepeat {
     }
 
     /// A review's repeat table: "Doesn't repeat" when there's no rule.
-    fn table(label: &str, recurrence: Option<&Recurrence>, start: NaiveDate) -> Display {
+    fn table(label: &str, recurrence: Option<&Recurrence>, start: NaiveDate, theme: &Theme, width: f32) -> Display {
         let rows = match recurrence {
             Some(recurrence) => Self::rows(recurrence, start),
             None => vec![("Repeats", "Doesn't repeat".into())],
         };
-        let rows = rows.into_iter().map(|(label, value)| TableItem::new(label, &value)).collect();
+        let rows = rows.into_iter().map(|(label, value)| {
+            TableItem::new(label, &DayScreen::fit_label(theme, width, &value, true))
+        }).collect();
         Display::table(label, rows, None)
     }
 

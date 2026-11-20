@@ -8,6 +8,7 @@ use ramp::prism::air::Instance;
 
 use crate::{Calendar, Category, Event, EventId, Exception, Override, Timing};
 
+use super::DayScreen;
 use super::schedule::{ChangeRepeat, ChangeTime};
 
 /// What an edit applies to: the whole series, or one occurrence by its original date.
@@ -27,7 +28,7 @@ impl EventScreen {
     pub fn flow(calendar: Instance<Calendar>, id: EventId, date: NaiveDate) -> Flow {
         Flow::new(vec![Page::watching(
             Watch::contract(calendar),
-            move |_ctx: &mut Context, theme: &Theme, calendar: Instance<Calendar>| {
+            move |ctx: &mut Context, theme: &Theme, calendar: Instance<Calendar>| {
                 let Some(series) = calendar.pending().event(id).cloned() else {
                     return Self::gone("This event was deleted.");
                 };
@@ -43,12 +44,11 @@ impl EventScreen {
                 let changed = series.changes(date).is_some();
 
                 let header_edit = Self::edit(theme, &calendar, id, date, &series);
-                let actions = Self::actions(
-                    theme, &calendar, id, date, &series, changed, header_edit.clone(),
-                );
-                let table = Display::table(
-                    "Event", Self::rows(&series, &event, date, changed), Some(actions),
-                );
+                let width = ctx.window.area().size.0;
+                let actions =
+                    Self::actions(theme, &calendar, id, date, &series, header_edit.clone(), width);
+                let rows = Self::rows(&series, &event, date, changed, theme, width);
+                let table = Display::table("Event", rows, Some(actions));
                 let changed_line = changed.then(|| {
                     Display::instructions("This occurrence was changed.")
                 });
@@ -115,7 +115,7 @@ impl EventScreen {
 
     /// The detail table for `event`, the occurrence on `date`: Time (and Series time when this
     /// occurrence moved), the repeat rows, Category, Location, Info, Link and Private.
-    fn rows(series: &Event, event: &Event, date: NaiveDate, changed: bool) -> Vec<TableItem> {
+    fn rows(series: &Event, event: &Event, date: NaiveDate, changed: bool, theme: &Theme, width: f32) -> Vec<TableItem> {
         let zone = Timing::device_zone();
         let series_time = series.series_timing(date)
             .filter(|timing| changed && timing != event.timing())
@@ -135,15 +135,18 @@ impl EventScreen {
                 Some(("Private", if event.private() { "Yes" } else { "No" }.to_string())),
             ].into_iter().flatten().collect(),
         ];
-        rows.into_iter().flatten().map(|(label, value)| TableItem::new(label, &value)).collect()
+        rows.into_iter().flatten().map(|(label, value)| {
+            TableItem::new(label, &DayScreen::fit_label(theme, width, &value, true))
+        }).collect()
     }
 
     /// The detail page's buttons. `edit` is the Edit details flow, shared with the header icon;
     /// Restore shows only when this occurrence was changed.
     fn actions(
         theme: &Theme, calendar: &Instance<Calendar>, id: EventId, date: NaiveDate, series: &Event,
-        changed: bool, edit: Flow,
+        edit: Flow, width: f32,
     ) -> Vec<ActionItem> {
+        let changed = series.changes(date).is_some();
         let time = |scope: Scope| {
             let (calendar, series) = (calendar.clone(), series.clone());
             Self::open(move |theme: &Theme| {
@@ -153,7 +156,7 @@ impl EventScreen {
         let time =
             Self::scoped(theme, series, date, time(Scope::Occurrence(date)), time(Scope::Series));
         let forms = [
-            ("Change repeat", ChangeRepeat::form(theme, calendar.clone(), id, series)),
+            ("Change repeat", ChangeRepeat::form(theme, calendar.clone(), id, series, width)),
             ("Change category", Self::category(theme, calendar.clone(), id, series)),
             ("Change privacy", Self::privacy(theme, calendar.clone(), id, series)),
         ];
@@ -256,7 +259,8 @@ impl EventScreen {
         let this = {
             let (calendar, series) = (calendar.clone(), series.clone());
             move |ctx: &mut Context, theme: &Theme| {
-                let flow = Self::cancel(calendar.clone(), id, date, &series);
+                let width = ctx.window.area().size.0;
+                let flow = Self::cancel(theme, calendar.clone(), id, date, &series, width);
                 flow.clone().build(ctx, theme)(ctx, theme)
             }
         };
@@ -265,11 +269,13 @@ impl EventScreen {
 
     /// The Cancel Occurrence review: the occurrence's time and a warning. Continue cancels it
     /// and returns to the day screen.
-    fn cancel(mut calendar: Instance<Calendar>, id: EventId, date: NaiveDate, series: &Event) -> Flow {
+    fn cancel(theme: &Theme, mut calendar: Instance<Calendar>, id: EventId, date: NaiveDate, series: &Event, width: f32) -> Flow {
         let timing = series.occurrence(date).unwrap_or(*series.timing());
         let when = Self::when(&timing, Timing::device_zone());
+        let when = DayScreen::fit_label(theme, width, &when, true);
         let title = series.effective(date)
             .map(|event| event.title().to_string()).unwrap_or_default();
+        let title = DayScreen::fit_label(theme, width, &title, true);
         let review = move |_states: &Vec<State>| {
             let rows = vec![TableItem::new("Title", &title), TableItem::new("Time", &when)];
             vec![

@@ -46,12 +46,13 @@ impl MonthScreen {
         ctx: &Context, theme: &Theme, calendar: &Instance<Calendar>, state: &Calendar,
         start: NaiveDate, now: DateTime<Utc>, zone: Tz,
     ) -> Display {
+        let width = ctx.window.area().size.0;
         // `Timing::today()`, at the same instant as the summaries' "has it ended?".
         let today = now.with_timezone(&zone).date_naive();
         let end = start + Months::new(1);
         let days = start.iter_days().take_while(|day| *day < end).map(|day| {
             let summary = Self::summary(&state.on(day, zone), day, now, zone)
-                .map(|summary| DayScreen::fit_label(ctx, theme, &summary));
+                .map(|summary| DayScreen::fit_label(theme, width, &summary, false));
             let weekday = match day == today {
                 true => format!("{} · Today", day.format("%A")),
                 false => day.format("%A").to_string(),
@@ -117,9 +118,10 @@ impl DayScreen {
                             (None, Some(location)) => format!("{category} · {location}"),
                             (None, None) => category.to_string(),
                         };
-                        let title = Self::fit_label(ctx, theme, occurrence.title());
+                        let width = ctx.window.area().size.0;
+                        let title = Self::fit_label(theme, width, occurrence.title(), false);
                         let time = Self::time_label(occurrence.timing(), day, zone);
-                        let time = Self::fit_label(ctx, theme, &time);
+                        let time = Self::fit_label(theme, width, &time, false);
                         let detail =
                             EventScreen::flow(calendar.clone(), occurrence.id(), occurrence.date());
                         ListItem::plain(&title, &subtitle, Some(&time), Some(detail))
@@ -144,19 +146,23 @@ impl DayScreen {
         )])
     }
 
-    /// `text` shortened to fit one side of a list row, ending in "…" when it was cut. pelican
-    /// would clip it mid-letter instead. Measured with the renderer's own layout, in the row
-    /// font (Heading, H5).
-    fn fit_label(ctx: &Context, theme: &Theme, text: &str) -> String {
-        // pelican's content is at most 423 pt wide with 24 pt padding each side; the row's
-        // forward icon takes 32 pt and its two columns share the rest, 8 pt apart. 2 pt spare
-        // covers the renderer rounding widths up.
-        let half = (ctx.window.area().size.0.min(423.0) - 48.0 - 32.0 - 8.0) / 2.0;
-        let max_width = (half - 2.0).max(0.0);
-        let Some(font) = theme.fonts().get_font("FontStyle::Heading") else {
-            return text.to_string();
+    /// `text` shortened to fit one side of a list row, or a table value with `table`, in a
+    /// window `width` wide, ending in "…" when it was cut. pelican would clip it mid-letter
+    /// instead. Measured with the renderer's own layout. Temporary: it goes once chk's renderer
+    /// draws its own ellipsis.
+    pub fn fit_label(theme: &Theme, width: f32, text: &str, table: bool) -> String {
+        // pelican's content is at most 423 pt wide with 24 pt padding each side. A row's
+        // forward icon takes 32 pt and its two columns share the rest, 8 pt apart; a table row
+        // has no icon, and a long value gets half after the 8 pt gap. 2 pt spare covers the
+        // renderer rounding widths up.
+        let content = width.min(423.0) - 48.0;
+        let (font, size, half) = match table {
+            false => ("FontStyle::Heading", "TextSize::H5", (content - 32.0 - 8.0) / 2.0),
+            true => ("FontStyle::Text", "TextSize::Sm", (content - 8.0) / 2.0),
         };
-        let size = theme.fonts().get_size("TextSize::H5");
+        let max_width = (half - 2.0).max(0.0);
+        let Some(font) = theme.fonts().get_font(font) else { return text.to_string() };
+        let size = theme.fonts().get_size(size);
         let fits = |text: &str| {
             let text = Text::new(text, font.clone(), size, Color::transparent(), Align::Left);
             text.size().0.ceil() <= max_width

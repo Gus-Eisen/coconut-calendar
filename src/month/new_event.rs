@@ -10,6 +10,7 @@ use std::rc::Rc;
 
 use crate::{Calendar, Category, Event, Timing};
 
+use super::DayScreen;
 use super::schedule::{ChangeRepeat, ChangeTime, FormTimes};
 
 /// The choices on the event-type picker. UI-only: never stored.
@@ -59,7 +60,7 @@ impl NewEvent {
             let [State::Enumerator(index)] = states.as_slice() else { unreachable!() };
             let (kind, calendar) = (EventKind::options()[*index], calendar.clone());
             FormComplete::Return(Box::new(move |ctx: &mut Context, theme: &Theme| {
-                let form = Self::form(theme, calendar.clone(), kind, day);
+                let form = Self::form(theme, calendar.clone(), kind, day, ctx.window.area().size.0);
                 Flow::from_form(form).build(ctx, theme)(ctx, theme)
             }))
         }) as Box<dyn FormSubmit>;
@@ -71,8 +72,11 @@ impl NewEvent {
     /// One kind's form: Start Time and End Time, or Last Day for an all-day kind, after Date /
     /// First Day; a repeating kind adds Repeats, Every, Until and Times. With `day`, there's no
     /// Date / First Day step.
-    fn form(theme: &Theme, calendar: Instance<Calendar>, kind: EventKind, day: Option<NaiveDate>) -> Form {
-        let review = move |states: &Vec<State>| Self::review(&Event::from_states(states, day));
+    fn form(theme: &Theme, calendar: Instance<Calendar>, kind: EventKind, day: Option<NaiveDate>, width: f32) -> Form {
+        let review_theme = theme.clone();
+        let review = move |states: &Vec<State>| {
+            Self::review(&Event::from_states(states, day), &review_theme, width)
+        };
 
         let success = move |states: Vec<State>| {
             let event = Event::from_states(&states, day);
@@ -161,7 +165,8 @@ impl NewEvent {
         Form::flow(theme, items, Some(review), Some(success), submit)
     }
 
-    fn review(event: &Event) -> Vec<Display> {
+    /// The table's values are cut to fit a window `width` wide.
+    fn review(event: &Event, theme: &Theme, width: f32) -> Vec<Display> {
         let start = event.timing().start_date();
         let repeat = event.recurrence()
             .map(|recurrence| ChangeRepeat::rows(recurrence, start)).unwrap_or_default();
@@ -180,8 +185,9 @@ impl NewEvent {
         ];
         vec![Display::table(
             "New event",
-            rows.into_iter().flatten()
-                .map(|(label, value)| TableItem::new(label, &value)).collect(),
+            rows.into_iter().flatten().map(|(label, value)| {
+                TableItem::new(label, &DayScreen::fit_label(theme, width, &value, true))
+            }).collect(),
             None,
         )]
     }
