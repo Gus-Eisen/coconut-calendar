@@ -1,5 +1,5 @@
 use chk::{Context, State};
-use chrono::{Datelike, Days, NaiveDate, NaiveTime};
+use chrono::{Datelike, Days, NaiveDate, NaiveTime, TimeDelta, Timelike};
 use chrono_tz::Tz;
 use ramp::prism::air::{Contract, Id, Instance, Metadata, Name};
 use serde::{Deserialize, Serialize};
@@ -80,8 +80,10 @@ impl Event {
 
     /// Reads a typed time: `9:30 PM`, `9:30pm`, `9pm`, `21:30`, or three or four digits whose
     /// last two are the minutes (`930`, `2130`, `930pm`). With AM/PM the hour is 1 to 12;
-    /// without, 0 to 23. A bare hour such as `9` is ambiguous, so it's rejected.
-    pub fn time(input: &str) -> Option<NaiveTime> {
+    /// without, 0 to 23. A bare hour such as `9` is ambiguous, so it's rejected. With `after`
+    /// (End Time's start), an hour of 1 to 12 with no AM/PM and no leading zero (`130`, not
+    /// `0130`) is AM or PM, whichever comes first on the clock from `after`, or equals it.
+    pub fn time(input: &str, after: Option<NaiveTime>) -> Option<NaiveTime> {
         let uppercase = input.trim().to_ascii_uppercase();
         let before = uppercase.strip_suffix("AM").or_else(|| uppercase.strip_suffix("PM"));
         let clock = before.unwrap_or(&uppercase).trim_end();
@@ -98,7 +100,20 @@ impl Event {
                 let clock = if clock.contains(':') { clock } else { format!("{clock}:00") };
                 NaiveTime::parse_from_str(&format!("{clock} {meridiem}"), "%I:%M %p").ok()
             }
-            None => NaiveTime::parse_from_str(&clock, "%H:%M").ok(),
+            None => {
+                let time = NaiveTime::parse_from_str(&clock, "%H:%M").ok()?;
+                let ambiguous = !clock.starts_with('0') && (1..=12).contains(&time.hour());
+                match after {
+                    Some(start) if ambiguous => {
+                        let other = time.with_hour((time.hour() + 12) % 24)?;
+                        let ahead = |time: NaiveTime| {
+                            (time - start + TimeDelta::days(1)).num_minutes() % (24 * 60)
+                        };
+                        [time, other].into_iter().min_by_key(|time| ahead(*time))
+                    }
+                    _ => Some(time),
+                }
+            }
         }
     }
 

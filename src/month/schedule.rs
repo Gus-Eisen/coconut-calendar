@@ -302,7 +302,7 @@ impl FormTimes {
 
     pub fn start_step(title: &str, times: Rc<RefCell<FormTimes>>) -> FormItem {
         FormItem::text(title, "9:30 AM", None, move |_ctx: &mut Context, input: String| {
-            let start = Event::time(&input);
+            let start = Event::time(&input, None);
             times.borrow_mut().start = start;
             Self::validity(&input, start.ok_or("Type a time like 9:30 AM or 9:30 PM."))
         })
@@ -331,7 +331,7 @@ impl FormTimes {
     pub fn end_time_step(times: Rc<RefCell<FormTimes>>, zone: Tz) -> FormItem {
         FormItem::text("End Time", "9:30 AM", None, move |_ctx: &mut Context, input: String| {
             let times = times.borrow();
-            let end = Event::time(&input).ok_or("Type a time like 9:30 AM or 9:30 PM.");
+            let end = Event::time(&input, times.start).ok_or("Type a time like 9:30 AM or 9:30 PM.");
             let checked = end.and_then(|end| {
                 let timing = match (times.date, times.start, times.end_date) {
                     (Some(date), Some(start), Some(end_date)) => Some(Timing::Timed {
