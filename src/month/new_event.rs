@@ -157,7 +157,10 @@ impl NewEvent {
             ),
             FormItem::text(
                 "Link", "Link (optional)", Some(vec![FormAction::Paste]),
-                |_ctx: &mut Context, _link: String| FormValidState::Valid,
+                |_ctx: &mut Context, link: String| match Event::web_link(&link) {
+                    Ok(_) => FormValidState::Valid,
+                    Err(error) => FormValidState::InvalidWithData(error.into()),
+                },
             ),
         ];
 

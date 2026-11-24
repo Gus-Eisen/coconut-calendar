@@ -333,7 +333,9 @@ impl EventScreen {
             let [State::Text(title), State::Text(location), State::Text(info), State::Text(link)] =
                 states.as_slice() else { unreachable!() };
             let Some(title) = Event::optional(title) else { return FormComplete::None };
-            save(title, Event::optional(location), Event::optional(info), Event::optional(link));
+            // Save is off while Link is invalid, so `web_link` is never `Err` here.
+            let link = Event::web_link(link).ok().flatten();
+            save(title, Event::optional(location), Event::optional(info), link);
             FormComplete::None
         }) as Box<dyn FormSubmit>;
         let optional = |label: &str, value: Option<&str>| {
@@ -352,7 +354,13 @@ impl EventScreen {
             ),
             optional("Location", event.location()),
             optional("Info", event.info()),
-            optional("Link", event.link()),
+            FormItem::text_with_preset(
+                "Link", event.link().unwrap_or(""), None,
+                |_ctx: &mut Context, link: String| match Event::web_link(&link) {
+                    Ok(_) => FormValidState::Valid,
+                    Err(error) => FormValidState::InvalidWithData(error.into()),
+                },
+            ),
         ];
         Form::page("Edit Event", items, vec![], submit)
     }

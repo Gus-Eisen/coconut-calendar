@@ -121,7 +121,8 @@ impl Event {
             location: Self::optional(location),
             info: Self::optional(info),
             attendees: vec![],
-            link: Self::optional(link),
+            // The Link step checked it, so it's never `Err` here.
+            link: Self::web_link(link).ok().flatten(),
             recurrence: (!repeat.is_empty()).then(|| Recurrence::from_states(repeat, start, start))
                 .flatten(),
             category: Category::options()[*category],
@@ -145,6 +146,41 @@ impl Event {
     pub fn optional(input: &str) -> Option<String> {
         let input = input.trim();
         (!input.is_empty()).then(|| input.to_string())
+    }
+
+    /// Checks a link typed into a form. Blank is `Ok(None)`. Otherwise it must be one token:
+    /// an `http://` or `https://` scheme (`https://` is added if there's none; any other
+    /// scheme, like `mailto:`, is refused), then a host of dot-separated labels of letters,
+    /// digits and inner hyphens, at least two of them, then an optional `:port` of digits and
+    /// anything after `/`, `?` or `#`. `Err` holds the message the form shows.
+    pub fn web_link(input: &str) -> Result<Option<String>, &'static str> {
+        let input = input.trim();
+        if input.is_empty() { return Ok(None); }
+        let error = "Enter a full link, like https://meet.google.com/abc";
+        if input.contains(char::is_whitespace) { return Err(error); }
+        // Letters, then a `:` not followed by a digit, is a scheme; a digit means a port.
+        let scheme = input.split_once(':').is_some_and(|(scheme, rest)| {
+            !scheme.is_empty() && scheme.chars().all(|c| c.is_ascii_alphabetic())
+                && !rest.starts_with(|c: char| c.is_ascii_digit())
+        });
+        let (rest, link) = match input.split_once("://") {
+            Some((scheme, rest)) if scheme.eq_ignore_ascii_case("http")
+                || scheme.eq_ignore_ascii_case("https") => (rest, input.to_string()),
+            Some(_) => return Err(error),
+            None if scheme => return Err(error),
+            None => (input, format!("https://{input}")),
+        };
+        let (host, tail) = rest.split_at(rest.find([':', '/', '?', '#']).unwrap_or(rest.len()));
+        let host_ok = host.contains('.') && host.split('.').all(|label| {
+            !label.is_empty() && !label.starts_with('-') && !label.ends_with('-')
+                && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        });
+        let port_ok = tail.strip_prefix(':').is_none_or(|port| {
+            port.split(['/', '?', '#']).next()
+                .is_some_and(|digits| !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()))
+        });
+        if !host_ok || !port_ok { return Err(error); }
+        Ok(Some(link))
     }
 
     /// The series' timing for the occurrence whose original date is `date`, ignoring any
