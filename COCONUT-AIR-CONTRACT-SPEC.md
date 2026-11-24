@@ -30,7 +30,7 @@ Screen numbers such as "see 21b" refer to `design/v1/screens/21b-*.png`.
 
 ## 1. Air Objects and Fields
 
-`Event` is a public struct with eleven private fields:
+`Event` is a public struct with thirteen private fields:
 
 | Field              | Type             | Meaning                                                  | Example                       |
 |--------------------|------------------|----------------------------------------------------------|-------------------------------|
@@ -45,8 +45,11 @@ Screen numbers such as "see 21b" refer to `design/v1/screens/21b-*.png`.
 | `time_proposals`   | `Vec<TimeProposal>` | New times that users have proposed and that are still waiting for everyone to agree. Empty if there are none. | `vec![TimeProposal { proposer: charlie, timing: Timing::Timed { .. }, approvals: {bob} }]` |
 | `private`          | `bool`           | `true` if only users with `Visibility::Private` can see the event (see section 3). Starts `false`. | `false` |
 | `deleted`          | `bool`           | `true` once the whole event has been deleted, including every occurrence if it repeats. Starts `false`. | `false` |
+| `created_by`       | `Name`           | Who created the event. `apply` sets this from `metadata.signer` on `CreateEvent`. | the creator's `Name` |
+| `last_changed_by`  | `Name`           | Who last actually changed the event. Set to the creator on `CreateEvent`; later messages update it only when the event changes. | the last editor's `Name` |
 
 One optional link replaces the video link and the attachments (Gus, 2026-11-20).
+Attribution fields were added in step 5 (Gus, 2026-11-24).
 
 ### Supporting types
 
@@ -434,6 +437,8 @@ Getters for every field except `deleted`:
 | `category` | `fn category(&self) -> Category` | Returns work or personal. |
 | `time_proposals` | `fn time_proposals(&self) -> &[TimeProposal]` | Returns the open time proposals. |
 | `private` | `fn private(&self) -> bool` | Returns whether the event is private. |
+| `created_by` | `fn created_by(&self) -> Name` | Who created the event. |
+| `last_changed_by` | `fn last_changed_by(&self) -> Name` | Who last actually changed the event. |
 
 There's no public getter for `deleted`; only `Calendar` (in the same module)
 checks it.
@@ -629,7 +634,8 @@ tables and save messages also keep `format_time`.
 ### Methods on `Calendar`
 
 All of an owner's events live in their `Calendar`, which holds a
-`BTreeMap<EventId, Event>`. Every change goes through it as a message to AIR.
+`BTreeMap<EventId, Event>`, the calendar's `creator`, and a `members` map of
+each person's `Role`. Every change goes through it as a message to AIR.
 When a message is applied, `Calendar` checks that the sender's role allows the
 action (section 4) and ignores it if not. Some messages need several actions
 (for example `split_series`). The sender's role must allow *every* one of them,
@@ -720,6 +726,13 @@ never arrived, and AIR's pending state has no way to report that. When
 | `remove_attendee` | `fn remove_attendee(calendar: &mut Instance<Calendar>, id: EventId, name: Name)` | `Attendee` |
 | `set_category` | `fn set_category(calendar: &mut Instance<Calendar>, id: EventId, category: Category)` | `Category` |
 | `set_private` | `fn set_private(calendar: &mut Instance<Calendar>, id: EventId, private: bool)` | `Privacy` |
+| `set_role` | `fn set_role(calendar: &mut Instance<Calendar>, name: Name, role: Role)` | `Members` |
+| `remove_member` | `fn remove_member(calendar: &mut Instance<Calendar>, name: Name)` | `Members` |
+
+`set_role` adds `name` or changes their role. `apply` ignores a change to the
+creator's role, and `remove_member` cannot remove the creator. `creator()`,
+`members()` and `role(name)` read the stored roster. Only an `Owner` can send
+these messages.
 
 `set_timing` also cancels every open time proposal on the event.
 
@@ -727,19 +740,23 @@ never arrived, and AIR's pending state has no way to report that. When
 `None` stops the event repeating. `set_link` sends
 `CalendarMessage::SetLink { id, link }`.
 
-`Calendar::id` is `Id::hash("CoconutCalendarV3")`. Postcard stores enum
+`Calendar::id` is `Id::hash("CoconutCalendarV4")`. Postcard stores enum
 variants by position, so new variants are only appended. The V3 enum was
 reordered once (the contract started with no data, so there was nothing
 to misread) and is append-only from here. The current order is:
 `CreateEvent`, `DeleteEvent`, `SetTitle`, `SetTiming`, `SetLocation`,
 `SetInfo`, `SetLink`, `SetCategory`, `SetPrivate`, `SetRecurrence`,
-`CancelOccurrence`, `ChangeOccurrence`, `RestoreOccurrence`.
+`CancelOccurrence`, `ChangeOccurrence`, `RestoreOccurrence`, `SetRole`,
+`RemoveMember`.
 
 (History: step 3a appended `SetRecurrence` after `RemoveAttachment`, and
 step 3b appended the three occurrence messages after that, keeping the id
 `CoconutCalendarV2`. Step 4b, 2026-11-20, replaced `SetVideoLink`,
 `AddAttachment` and `RemoveAttachment` with `SetLink` after `SetInfo` and
-bumped the id to V3, which started with no data.)
+bumped the id to V3, which started with no data. Step 5, 2026-11-24, added
+`created_by` and `last_changed_by` on `Event`, and `creator` and `members`
+on `Calendar`, and appended `SetRole` and `RemoveMember`. The id was bumped
+to V4, which starts with no data: an existing V3 calendar is not opened.)
 
 **Checking a recurrence.** `Recurrence::is_valid(&self, timing: &Timing) ->
 bool` is the one rule the forms and `apply` share. A recurrence is valid when:
@@ -892,19 +909,24 @@ Bob has friends and colleagues who need to interact with his calendar (more spec
 
 An Coconut event is digital and thus differs from the material world. The creator of an event is the owner by default. Ownership is defined by control, ie, the power to modify the event's title, info box, time, and attendee list.
 
-I'm also (currently) imagining roles as an enum:
+I'm also (currently) imagining roles as an enum. Four roles (Gus, 2026-11-24),
+least powerful first:
 
 ```rust
 pub enum Role {
-    Owner,
     Colleague,
+    Viewer,
+    Editor,
+    Owner,
 }
 ```
 
 | Role | Who | Visibility | Example |
 |------|-----|------------|---------|
+| `Colleague` | Someone who needs to see when the calendar is busy and propose a new event for an Owner to approve (for example a colleague finding an open slot). | `FreeBusy` | Charlie |
+| `Viewer` | Someone who can look at event details but not change anything. | `Details` | — |
+| `Editor` | Someone who can create, change and delete events, but can't manage people and can't see or set private events. | `Details` | — |
 | `Owner` | The calendar's owner, and anyone the owner trusts with full control, such as a personal assistant or the owner's own agent. | `Private` | Bob, Alice |
-| `Colleague` | Someone who only needs to propose new event times. | `Details` | Charlie |
 
 The calendar's creator can never lose the `Owner` role. Other Owners can't remove
 it, and neither can anyone else, including the creator themselves. The creator is the user who created the
@@ -913,18 +935,30 @@ calendar's AIR instance; AIR passes their `Name` to the contract's `init` as
 
 Screens (step 5):
 
-- **People** is a root tab (UI: see 20). It lists everyone with a role on the
-  calendar and their role, with the creator marked "created this calendar", and
-  has an Add Person button.
-- **Add Person** (UI: see 21, 21b): `FormItem::search` over the people this
-  device knows (with "New contact"), then a **Role** radio list, then Review and
-  Success. The role list puts **Colleague first**, so the least powerful role is
-  the default and giving someone full control always takes a deliberate tap.
-  Each option's subtitle says what the role can do: Colleague "Can propose new
-  times. Sees event details."; Owner "Full control: sees private events."
+- **People** is a root tab (UI: see 20), beside Home. It lists everyone with a
+  role on the calendar and their role, with the creator first, marked
+  "created this calendar", and the current user marked "(you)". The creator
+  has no detail page (nothing to change or remove). Add Person is Owner-only.
+- **Add Person** (UI: see 21, 21b): `FormItem::search` over the profiles this
+  device already knows (people already on the calendar are left out), with
+  "New contact" to paste or scan an AIR `Name`, then a **Role** radio list,
+  then Review and Success. The role list puts **Colleague first**, then
+  Viewer, Editor, Owner, so the least powerful role is the default and giving
+  someone more power always takes a deliberate tap. Each option's subtitle
+  says what the role can do: Colleague "Can propose new times. Sees when
+  you're busy."; Viewer "Sees event details. Can't make changes."; Editor
+  "Can create and change events. Doesn't see private events."; Owner "Full
+  control; sees private events."
 - **Person detail** (UI: see 22): their role, what they see and what they can
-  do, with Change role and Remove. Remove asks for confirmation (Remove /
-  Cancel). The creator's page has no Remove.
+  do, with Change role and Remove (both Owner-only). Remove asks for
+  confirmation (Remove / Cancel). chk's role list always starts on the first
+  option, so Change role puts the current role first and marks it, rather
+  than leaving Colleague selected by default.
+- Adding a person records their role on this calendar. Sharing the instance,
+  proposing an event, and hiding details from a Colleague or private events
+  from Editor and Viewer are later steps (6 and 7). The History log (UI: see
+  23) is not in this step; the event detail page shows Created by and Last
+  changed by instead.
 
 ### Visibility
 
@@ -994,23 +1028,27 @@ pub enum Action {
     ProposeTime,
     Privacy,
     Category,
+    Members,
 }
 ```
 
-| Action | `Owner` | `Colleague` |
-| -------- | :--------: | :-----------: |
-| `Create` | ✅ | ❌ |
-| `Delete` | ✅ | ❌ |
-| `Title` | ✅ | ❌ |
-| `Time` | ✅ | ❌ |
-| `Info` | ✅ | ❌ |
-| `Location` | ✅ | ❌ |
-| `Recurrence` | ✅ | ❌ |
-| `Attendee` | ✅ | ❌ |
-| `Link` | ✅ | ❌ |
-| `ProposeTime` | ✅ | ✅ |
-| `Privacy` | ✅ | ❌ |
-| `Category` | ✅ | ❌ |
+Four-role permissions (Gus, 2026-11-24):
+
+| Action | `Owner` | `Editor` | `Viewer` | `Colleague` |
+| -------- | :--------: | :--------: | :--------: | :-----------: |
+| `Create` | ✅ | ✅ | ❌ | ❌ |
+| `Delete` | ✅ | ✅ | ❌ | ❌ |
+| `Title` | ✅ | ✅ | ❌ | ❌ |
+| `Time` | ✅ | ✅ | ❌ | ❌ |
+| `Info` | ✅ | ✅ | ❌ | ❌ |
+| `Location` | ✅ | ✅ | ❌ | ❌ |
+| `Recurrence` | ✅ | ✅ | ❌ | ❌ |
+| `Attendee` | ✅ | ✅ | ❌ | ❌ |
+| `Link` | ✅ | ✅ | ❌ | ❌ |
+| `ProposeTime` | ✅ | ✅ | ❌ | ✅ |
+| `Privacy` | ✅ | ❌ | ❌ | ❌ |
+| `Category` | ✅ | ✅ | ❌ | ❌ |
+| `Members` | ✅ | ❌ | ❌ | ❌ |
 
 | Action | Changes the field |
 | -------- | ------------------- |
@@ -1023,26 +1061,34 @@ pub enum Action {
 | `Recurrence` | `recurrence`'s `frequency` and `until` |
 | `Attendee` | `attendees` (adding and removing attendees) |
 | `Link` | `link` |
-| `ProposeTime` | `time_proposals` (adding a proposal) |
+| `ProposeTime` | `time_proposals` (adding a proposal). Defined for Colleague and Owner; not wired until step 6. Editor also has it, and can already set the time. |
 | `Privacy` | `private` (moves the event between the "Events" and "Private events" instances) |
 | `Category` | `category` |
+| `Members` | The calendar's member list (adding a person, changing a role, removing a person) |
+
+`CreateEvent` also needs `Privacy` if the sent event is already private, so an
+Editor can't create a private event that way. `CancelOccurrence` needs
+`Delete`. `ChangeOccurrence` needs one action per field set on the
+`Override`; `RestoreOccurrence` needs the same for the override being
+cleared, and is ignored if there isn't one.
 
 ### Who made each change
 
-Every change is recorded with the user who made it (`metadata.signer`). Changes
-an agent makes are attributed to the agent, not the owner.
+Every change is recorded with the user who made it (`metadata.signer`). The
+event stores that as `created_by` when it's created, and as `last_changed_by`
+when a later message actually changes it. Changes an agent makes are
+attributed to the agent, not the owner.
 
 Agents and other users join the owner's calendar with their own identity, never
 with the owner's credentials. AIR signs every message with the sender's key, so a
 user can't make a change look like someone else made it.
 
+`init` stores `metadata.signer` as the creator and as an Owner. `apply`
+looks up the sender's role and ignores the message unless that role allows
+every action it needs.
+
 ### Open questions
 
-- Assigning roles isn't an `Action` yet, though design v1 has screens for it
-  (UI: see 21, 21b, 22). Presumably only `Owner` can do it.
-- Nothing enforces roles in the code yet. Only the owner writes to their own
-  `Calendar`. Roles will be enforced in `Calendar::apply`, and `init` will store
-  the creator from `metadata.signer`.
 - **For AIR's developer:** will AIR get a way to revoke someone's
   access to an instance or rotate its key? Nothing exists in air 4.0.1 or
   ramp2 3.0.4. Until then, removing a role means rebuilding instances (see
@@ -1150,7 +1196,14 @@ change *where* events are sent, not what an `Event` is.
    contract id is `CoconutCalendarV3`. Create Event from the Day view
    (done, 2026-11-20): the bumper is on today and later days; Date / First
    Day is skipped; the start is that day's full date.
-5. Attribution and roles, and the People tab (UI: see 20–23).
+5. Attribution and roles, and the People tab (done, 2026-11-24): four roles
+   (`Colleague`, `Viewer`, `Editor`, `Owner`), role checks in `apply`,
+   `created_by` / `last_changed_by`, and the People tab (UI: see 20–22). The
+   contract id is `CoconutCalendarV4`. Colleague proposals and the approval
+   flow are step 6. Showing busy blocks, and hiding private events from
+   Editor and Viewer, is step 7. The History log (UI: see 23) is still not
+   in the order of work; the event detail page shows Created by and Last
+   changed by.
 6. Invites and time proposals, and the Invites tab. A test of
    `Instance::share` between two identities comes first (UI: see 24–29).
 7. Visibility, and the Shared tab (UI: see 30, 31).
@@ -1298,11 +1351,13 @@ doesn't decide yet. The open questions in sections 2 and 4 still stand.
 **Roles and history**
 
 - **Display names.** chk's `Profile` contract stores a `username` and `avatar`
-  for each `Name`, and the people pickers use it (UI: see 21, 24). That may
-  answer the display-name question in section 2, if Coconut can read the same
-  profiles.
+  for each `Name`, and the people pickers use it (UI: see 21, 24). Step 5's
+  People tab and the event detail attribution rows read those profiles when
+  they exist, and otherwise show a short form of the public key.
 - **Change history.** Screen 23 sketches a list of who changed what, from each
   message's `metadata.signer`, but it isn't in the order of work (UI: see 23).
+  Step 5 stores `created_by` and `last_changed_by` and shows them on the
+  event detail page instead of building this log.
 
 ------
 
