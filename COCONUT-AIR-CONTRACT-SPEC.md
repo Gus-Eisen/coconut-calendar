@@ -1055,7 +1055,7 @@ ownership and permissions model.
 
 | View | Shows |
 |------|-------|
-| Month | chk has no grid component, so it's a list, not a grid: one section per month, for 13 months from `Event::window_start()` (so a date nearly a year ahead is on screen), and one row per day with the day number, the weekday and a summary on the right. A day with one event shows its start time (or "All day") and title, e.g. "9:30 AM Standup" or "11 PM Night", even after it has ended. On a later day of a timed event that started earlier, the summary shows when it ends today, e.g. "until 1 AM Night shift", or "until 6 Dec Trip" on a middle day. Long summaries are shortened with "…" to fit the row (`DayScreen::fit_label`). The category isn't shown: the right-hand text is one line; the Day view shows the category. Today is marked with a dot and "Today" in the subtitle, and is `Timing::today()` (the current date in the viewer's time zone). A multi-day event appears on every day it covers. Tapping a day opens its Day view, including empty and past days. Every row shows a chevron, because chk shows one on any row with a flow. The root's one header icon is free (UI: see 01, 19). |
+| Month | chk has no grid component, so it's a list, not a grid: one section per month, for 13 months from `Event::window_start()` (so a date nearly a year ahead is on screen), and one row per day with the day number, the weekday and a summary on the right. A day with one event shows its start time (or "All day") and title, e.g. "9:30 AM Standup" or "11 PM Night", even after it has ended. An overnight event (timed, under 24 hours, started on an earlier day in the viewer's zone) shows only on the day it starts; its tail isn't shown on the month row for the next day, as in Google Calendar, though that day's Day view still lists it ("until 2:30 AM"). A day whose only occurrence is such a tail has no summary but still opens its Day view. A timed event of 24 hours or more shows on every day it covers: on a later day the summary shows when it ends, e.g. "until 10 AM Weekend", or "until 13 Dec Weekend" on a middle day. Long summaries are shortened with "…" to fit the row (`DayScreen::fit_label`). The category isn't shown: the right-hand text is one line; the Day view shows the category. Today is marked with a dot and "Today" in the subtitle, and is `Timing::today()` (the current date in the viewer's time zone). A multi-day event (all-day, or timed for 24 hours or more) appears on every day it covers. Tapping a day opens its Day view, including empty and past days. Every row shows a chevron, because chk shows one on any row with a flow. The root's one header icon is free (UI: see 01, 19). |
 | Day | Every occurrence on one day, from `Calendar::on`: all-day events first, then the rest by start time. It's a list, not an hour grid. The page title is the short date, e.g. "Wed 25 Nov" (chk cuts longer titles). Each row shows the title, the category label (with the location, or that it repeats), and the time in the viewer's time zone (`DayScreen::time_label`: "9:30 PM–10 PM" on one day, "from 11 PM" on the first day of an overnight event, "until 1 AM" on the last, or "until 6 Dec" on a middle day). The title and the time are shortened with "…" to fit (`DayScreen::fit_label`). Tapping a row opens the event detail page, which has edit and delete. Editing or deleting an occurrence of a repeating event asks Which Events?: This occurrence or Whole series (UI: see 16). A day with no events (including one opened empty from the month, or after deleting or cancelling the last event while its page is open) shows "No events on this day." On today and later days (`Timing::today()`), a **Create Event** bumper opens the new-event flow starting on that day; on an empty such day the button sits under that message. A past day has no button. A display page can't swipe, so going to another day means going back to the month (UI: see 18). |
 
 **Month summary for a day with several events.** The row shows the first timed
@@ -1065,9 +1065,11 @@ Foo at 9:15 AM and Bar at 11:00 AM. If no timed event is left, today and later d
 show the first all-day event; an all-day event counts as not ended for its
 whole day, but never hides a timed event that hasn't ended. Once every event
 that day has ended, the row shows "N events". A day with only one event still
-shows that event's time and title, even after it has ended. The summary uses
-the same labels as a one-event day (start time or "All day", or "until …" on
-a later day of a timed event, and the title); nothing is appended (no "+N").
+shows that event's time and title, even after it has ended. Hidden overnight
+tails are dropped first, so they're never chosen or counted: a tail plus one
+event is a one-event day. The summary uses the same labels as a one-event day
+(start time or "All day", or "until …" on a later day of a timed event of 24
+hours or more, and the title); nothing is appended (no "+N").
 Long summaries are shortened with "…". The row only updates when the page
 rebuilds (a relaunch or any calendar change), not when an event ends while the
 app is open (UI: see 01, 19).
@@ -1234,6 +1236,10 @@ doesn't decide yet. The open questions in sections 2 and 4 still stand.
   open: page header titles still clip mid-letter. chk's own one-line
   ellipsis is still drawn outside the row (see the notes for chk's
   developer).
+- **Overnight events in the month.** Decided 2026-11-23 (Gus): a timed
+  event under 24 hours shows on the month only on its start day, like Google
+  Calendar; the Day view still lists its tail. Timed events of 24 hours or
+  more and all-day spans still show on every day they cover.
 
 **Invites and proposals**
 
