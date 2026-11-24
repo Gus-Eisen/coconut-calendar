@@ -8,7 +8,7 @@ use ramp::prism::air::Instance;
 
 use crate::{Calendar, Category, Event, EventId, Exception, Override, Timing};
 
-use super::DayScreen;
+use super::{DayScreen, PeopleScreen};
 use super::schedule::{ChangeRepeat, ChangeTime};
 
 /// What an edit applies to: the whole series, or one occurrence by its original date.
@@ -47,7 +47,16 @@ impl EventScreen {
                 let width = ctx.window.area().size.0;
                 let actions =
                     Self::actions(theme, &calendar, id, date, &series, header_edit.clone(), width);
-                let rows = Self::rows(&series, &event, date, changed, theme, width);
+                let people = [
+                    ("Created by", series.created_by()),
+                    ("Last changed by", series.last_changed_by()),
+                ]
+                    .map(|(label, name)| {
+                        let (_, username) = PeopleScreen::person(ctx, name);
+                        TableItem::new(label, &DayScreen::fit_label(theme, width, &username, true))
+                    });
+                let rows = Self::rows(&series, &event, date, changed, theme, width).into_iter()
+                    .chain(people).collect();
                 let table = Display::table("Event", rows, Some(actions));
                 let changed_line = changed.then(|| {
                     Display::instructions("This occurrence was changed.")
@@ -232,17 +241,17 @@ impl EventScreen {
     fn edit(theme: &Theme, calendar: &Instance<Calendar>, id: EventId, date: NaiveDate, series: &Event) -> Flow {
         let whole = {
             let (calendar, series) = (calendar.clone(), series.clone());
-            Self::open(move |_theme: &Theme| Self::edit_details(calendar.clone(), id, &series))
+            Self::open(move |theme: &Theme| Self::edit_details(theme, calendar.clone(), id, &series))
         };
         let this = {
             let (calendar, series) = (calendar.clone(), series.clone());
-            Self::open(move |_theme: &Theme| {
-                Self::edit_occurrence(calendar.clone(), id, date, &series)
+            Self::open(move |theme: &Theme| {
+                Self::edit_occurrence(theme, calendar.clone(), id, date, &series)
             })
         };
         match series.recurrence() {
             Some(_) => Self::scope(theme, date, this, whole),
-            None => Flow::from_form(Self::edit_details(calendar.clone(), id, series)),
+            None => Flow::from_form(Self::edit_details(theme, calendar.clone(), id, series)),
         }
     }
 
@@ -295,10 +304,9 @@ impl EventScreen {
     }
 
     /// Save sends one message per field that changed, comparing after trimming.
-    fn edit_details(mut calendar: Instance<Calendar>, id: EventId, event: &Event) -> Form {
-        Self::details_page(event, move |title, location, info, link| {
-            // The live event, not the one the page opened with, so a second Save on the same page
-            // only sends what changed since the first.
+    fn edit_details(theme: &Theme, mut calendar: Instance<Calendar>, id: EventId, event: &Event) -> Form {
+        Self::details_page(theme, event, move |title, location, info, link| {
+            // Compare against the live event so updates received while editing are considered.
             let Some(event) = calendar.pending().event(id).cloned() else { return };
             if title != event.title() { Calendar::set_title(&mut calendar, id, title); }
             let optional = [
@@ -314,9 +322,9 @@ impl EventScreen {
 
     /// Edit details for one occurrence: filled with its own values. Save sends them as one
     /// `change_occurrence`; a field equal to the series' is stored as "same as the series".
-    fn edit_occurrence(mut calendar: Instance<Calendar>, id: EventId, date: NaiveDate, series: &Event) -> Form {
+    fn edit_occurrence(theme: &Theme, mut calendar: Instance<Calendar>, id: EventId, date: NaiveDate, series: &Event) -> Form {
         let event = series.effective(date).unwrap_or_else(|| series.clone());
-        Self::details_page(&event, move |title, location, info, link| {
+        Self::details_page(theme, &event, move |title, location, info, link| {
             Self::change(&mut calendar, id, date, |changes, series| {
                 changes.set_title(title, series.title());
                 changes.set_location(location, series.location());
@@ -328,14 +336,20 @@ impl EventScreen {
 
     /// The Edit details page, filled with `event`'s values. Save trims every field once and
     /// hands `save` the title, location, info and link; a blank title saves nothing.
-    fn details_page(event: &Event, mut save: impl FnMut(String, Option<String>, Option<String>, Option<String>) + Clone + 'static) -> Form {
-        let submit = Box::new(move |_ctx: &mut Context, states: &Vec<State>| {
+    fn details_page(
+        theme: &Theme, event: &Event,
+        mut save: impl FnMut(String, Option<String>, Option<String>, Option<String>) + Clone + 'static,
+    ) -> Form {
+        let theme = theme.clone();
+        let submit = Box::new(move |ctx: &mut Context, states: &Vec<State>| {
             let [State::Text(title), State::Text(location), State::Text(info), State::Text(link)] =
                 states.as_slice() else { unreachable!() };
             let Some(title) = Event::optional(title) else { return FormComplete::None };
             // Save is off while Link is invalid, so `web_link` is never `Err` here.
             let link = Event::web_link(link).ok().flatten();
             save(title, Event::optional(location), Event::optional(info), link);
+            // chk edit pages discard the submit callback's return value.
+            Self::back().run(ctx, &theme);
             FormComplete::None
         }) as Box<dyn FormSubmit>;
         let optional = |label: &str, value: Option<&str>| {

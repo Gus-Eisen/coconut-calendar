@@ -23,8 +23,12 @@ impl prism::Application for CoconutCalendar {
 
 impl App for CoconutCalendar {
     fn roots(&self, ctx: &mut Context, theme: &Theme) -> Vec<RootInfo> {
-        let home = MonthScreen::root(ctx);
-        vec![RootInfo::icon(ctx, theme, Icons::Home, "Home", home)]
+        let calendar = Calendar::open(ctx);
+        let (home, people) = (MonthScreen::root(calendar.clone()), PeopleScreen::root(calendar));
+        vec![
+            RootInfo::icon(ctx, theme, Icons::Home, "Home", home),
+            RootInfo::icon(ctx, theme, Icons::Group, "People", people),
+        ]
     }
 
     fn theme(&self) -> ChkTheme {

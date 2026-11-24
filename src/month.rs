@@ -12,12 +12,14 @@ pub use detail::EventScreen;
 mod new_event;
 pub use new_event::NewEvent;
 mod schedule;
+mod people;
+pub use people::PeopleScreen;
 
 pub struct MonthScreen;
 impl MonthScreen {
-    pub fn root(ctx: &mut Context) -> Root {
+    pub fn root(calendar: Instance<Calendar>) -> Root {
         Root::custom(Page::watching(
-            Watch::contract(Calendar::open(ctx)),
+            Watch::contract(calendar),
             |ctx: &mut Context, theme: &Theme, calendar: Instance<Calendar>| {
                 let (state, now, first) = (calendar.pending(), Utc::now(), Event::window_start());
                 let zone = Timing::device_zone();

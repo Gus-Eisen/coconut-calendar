@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use std::collections::BTreeMap;
 
-use super::{Event, Response, Timing};
+use super::{Action, Event, Response, Timing};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Exception {
@@ -31,6 +31,16 @@ impl Override {
 
     /// Nothing differs from the series.
     pub fn is_empty(&self) -> bool { *self == Override::default() }
+
+    /// The actions setting or clearing these changes needs: one per field that differs.
+    pub fn actions(&self) -> Vec<Action> {
+        [
+            (self.title.is_some(), Action::Title), (self.timing.is_some(), Action::Time),
+            (self.location.is_some(), Action::Location), (self.info.is_some(), Action::Info),
+            (self.link.is_some(), Action::Link),
+        ]
+            .into_iter().filter_map(|(set, action)| set.then_some(action)).collect()
+    }
 
     // Each setter takes the series' value too: a value equal to it is stored as `None` ("same
     // as the series"), so the occurrence keeps following the series for that field.
