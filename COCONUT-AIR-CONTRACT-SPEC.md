@@ -445,7 +445,7 @@ Helpers for the new-event forms:
 | `window_start` | `fn window_start() -> NaiveDate` | The first day of `Timing::today()`'s month, where the month list starts. |
 | `date` | `fn date(input: &str) -> Option<NaiveDate>` | Reads a `DD-MM` date as the first such date on or after today (`Timing::today()`): `date_from(input, today)`. Used for every first date (Date, First Day). `None` if the input isn't a valid date. |
 | `date_from` | `fn date_from(input: &str, earliest: NaiveDate) -> Option<NaiveDate>` | Reads a `DD-MM` date as the first such date on or after `earliest`: it tries `earliest`'s year, then the next year. `None` if neither gives a valid date on or after `earliest` (e.g. `29-02` when the next 29 February is more than a year away). |
-| `time` | `fn time(input: &str) -> Option<NaiveTime>` | Reads a clock time after trim, case-insensitive. Accepts 12-hour forms such as `9:30 AM`, `9:30am`, `9:30 pm` and `9am` (missing minutes mean `:00`; hour 1–12; `12 AM` is 00:00, `12 PM` is 12:00) and 24-hour `21:30` or `09:30` (hour 0–23, no meridiem). `None` if invalid (e.g. `13:00 pm`, `9:75`). |
+| `time` | `fn time(input: &str) -> Option<NaiveTime>` | Reads a clock time after trim, case-insensitive. Accepts 12-hour forms such as `9:30 AM`, `9:30am`, `9:30 pm` and `9am` (missing minutes mean `:00`; hour 1–12; `12 AM` is 00:00, `12 PM` is 12:00) 24-hour `21:30` or `09:30` (hour 0–23, no meridiem), and 3 or 4 digits with no colon whose last two are the minutes, with or without a meridiem (`930` and `0930` are 09:30, `2130` is 21:30, `930pm` is 21:30, `1230am` is 00:30; hour 0–23 without a meridiem, 1–12 with one). A bare 1–2 digit number such as `9` is ambiguous and invalid. `None` if invalid (e.g. `13:00 pm`, `9:75`, `960`, `2400`, `1330pm`). |
 | `from_states` | `fn from_states(states: &[State], day: Option<NaiveDate>) -> Event` | Builds an `Event` from any new-event form's inputs, in the device's time zone. All four forms end with Location, Info and Link; those are stored with `optional`. With `Some(day)` (the Day view's Create Event), the form skipped Date / First Day and the event starts on `day`, via `Timing::from_start`. With `None` (the month's Create Event), it reads Date / First Day with `Timing::from_states`. Sets `deleted: false`. The form checks the inputs first, so this panics if they're invalid. It only ever reads form inputs, never AIR data. |
 | `optional` | `fn optional(input: &str) -> Option<String>` | Trims a text. Returns `None` if it's empty. The forms and `apply` both use it, so they share one rule. |
 
@@ -533,8 +533,9 @@ Repeating all-day 10. From the month they stay 8, 7, 12 and 11.
 - Dates are `DD-MM` (`Event::date`) on the number keypad. Start Time and
   End Time are text steps (`FormItem::text`, placeholder "9:30 AM"): chk's
   time keypad is a four-digit `HH:MM` pad with no letters. `Event::time`
-  accepts 12-hour forms (`9:30 AM`, `9:30pm`, `9am`) and 24-hour `21:30`.
-  Invalid input shows "Use 9:30 AM or 21:30." and turns Continue off.
+  accepts 12-hour forms (`9:30 AM`, `9:30pm`, `9am`), 24-hour `21:30`, and
+  times without a colon (`930`, `2130`, `930pm`). Invalid input shows "Type
+  a time like 9:30 AM or 9:30 PM." and turns Continue off.
   Date / Last Day / End Date / Until stay on the number keypad.
 - The new-event forms have no End Date step (Gus, 2026-11-16). The end date
   is worked out from End Time: if End Time is later than Start Time, the event
@@ -789,7 +790,7 @@ split:
 | Screen | What it changes | How |
 |--------|-----------------|-----|
 | Edit details (UI: see 08) | Title, Location, Info, Link | One page (`Form::page` / `PageType::edit_and_display`) with a `FormItem::text_with_preset` for each field, filled with the current values. Save stays off until something changes and every field is valid. Link is checked with `Event::web_link`, the same as the Link step: an invalid link shows the same error and keeps Save off. A blank Link is stored as `None`, and a link without a scheme is saved with `https://`. Calls the setter for each changed field. On a repeating event, the existing Which Events? step covers the link like the other text fields. |
-| Change time (UI: see 09) | `timing` | A flow: Date, Start Time, End Date, End Time, then a review showing the current and new times. Step titles are plain ("Start Time", "End Time"): chk clips longer ones. Date is on or after today; End Date uses the same rule as Last Day (on or after the start, at most 28 days later). Start Time and End Time are text steps, same as the new-event forms. Times are typed (12-hour or 24-hour) and shown in 12-hour form in the event's own time zone (the `time_zone` in its `Timing`), and the review names it, e.g. "25 Nov 2026, 10:00 AM". An all-day event changed to timed uses the device's zone. Calls `set_timing`, unless the timing is unchanged. For one occurrence (3b), Current is the occurrence's own time, there's no Until limit, and it calls `change_occurrence`. |
+| Change time (UI: see 09) | `timing` | A flow: Date, Start Time, End Date, End Time, then a review showing the current and new times. Step titles are plain ("Start Time", "End Time"): chk clips longer ones. Date is on or after today; End Date uses the same rule as Last Day (on or after the start, at most 28 days later). Start Time and End Time are text steps, same as the new-event forms. Times are typed (12-hour, 24-hour, or without a colon, as in the new-event forms) and shown in 12-hour form in the event's own time zone (the `time_zone` in its `Timing`), and the review names it, e.g. "25 Nov 2026, 10:00 AM". An all-day event changed to timed uses the device's zone. Calls `set_timing`, unless the timing is unchanged. For one occurrence (3b), Current is the occurrence's own time, there's no Until limit, and it calls `change_occurrence`. |
 | Change to all-day or timed (UI: see 10) | `timing` | A picker like the event-type picker (Timed / All-day, with the current timing in the first option's subtitle), then the matching timing flow. |
 | Change category or privacy (UI: see 11) | `category`, `private` | A one-step radio page: Personal / Work, or Not private / Private. The radio always starts on its first option, so the current value is shown as that option's subtitle. Calls `set_category` or `set_private`. |
 | Change repeat (UI: see 15) | `recurrence` | See `Recurrence`. |
@@ -1178,9 +1179,16 @@ doesn't decide yet. The open questions in sections 2 and 4 still stand.
   List rows use `Timing::format_short_time`, which drops ":00" on the hour
   ("11 PM", "9:30 PM"). Start Time and End Time are text steps
   (placeholder "9:30 AM") that accept 12-hour forms (`9:30 AM`, `9:30pm`,
-  `9am`) and 24-hour `21:30` (`Event::time`); invalid input shows
-  "Use 9:30 AM or 21:30." Storage stays chrono (`NaiveTime` /
-  `NaiveDateTime`) and the contract stays `CoconutCalendarV3`.
+  `9am`) and 24-hour `21:30` (`Event::time`); see Time input below.
+  Storage stays chrono (`NaiveTime` / `NaiveDateTime`) and the contract
+  stays `CoconutCalendarV3`.
+- **Time input.** Decided 2026-11-23 (Gus): keep accepting both 12-hour and
+  24-hour input and keep showing 12-hour everywhere. Times can also be typed
+  without a colon: 3 or 4 digits, the last two being minutes, 24-hour without
+  am/pm (`930` is 9:30 AM, `2130` is 9:30 PM) and 1–12 with it (`930pm`). A
+  bare `9` stays invalid. The error leads with 12-hour: "Type a time like
+  9:30 AM or 9:30 PM." (the old "Use 9:30 AM or 21:30." read as if the two
+  were the same time). Storage and display are unchanged.
 - **Quick create, search, schedule view.** Are any of these wanted early? The
   month root's one header icon is free and could open Search or "Go to date"
   (UI: see 19).
