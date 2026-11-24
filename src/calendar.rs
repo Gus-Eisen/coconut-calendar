@@ -12,6 +12,8 @@ mod recurrence;
 pub use recurrence::*;
 mod exception;
 pub use exception::*;
+mod role;
+pub use role::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Category {
@@ -58,6 +60,8 @@ pub struct Event {
     time_proposals: Vec<TimeProposal>,
     private: bool,
     deleted: bool,
+    created_by: Name,
+    last_changed_by: Name,
 }
 
 impl Event {
@@ -156,6 +160,9 @@ impl Event {
             time_proposals: vec![],
             private: false,
             deleted: false,
+            // Placeholders: `apply` sets both from the sender.
+            created_by: Name::orange_me(),
+            last_changed_by: Name::orange_me(),
         })
     }
 
@@ -169,6 +176,8 @@ impl Event {
     pub fn category(&self) -> Category { self.category }
     pub fn time_proposals(&self) -> &[TimeProposal] { &self.time_proposals }
     pub fn private(&self) -> bool { self.private }
+    pub fn created_by(&self) -> Name { self.created_by }
+    pub fn last_changed_by(&self) -> Name { self.last_changed_by }
 
     pub fn optional(input: &str) -> Option<String> {
         let input = input.trim();
@@ -367,12 +376,35 @@ pub enum CalendarMessage {
     CancelOccurrence { id: EventId, date: NaiveDate },
     ChangeOccurrence { id: EventId, date: NaiveDate, changes: Override },
     RestoreOccurrence { id: EventId, date: NaiveDate },
+    /// Adds `name`, or changes their role if they're already on the calendar.
+    SetRole { name: Name, role: Role },
+    RemoveMember { name: Name },
+}
+
+impl CalendarMessage {
+    /// The event the message changes, if it's about one.
+    fn event(&self) -> Option<EventId> {
+        match self {
+            CalendarMessage::CreateEvent { id, .. } | CalendarMessage::DeleteEvent { id }
+            | CalendarMessage::SetTitle { id, .. } | CalendarMessage::SetTiming { id, .. }
+            | CalendarMessage::SetLocation { id, .. } | CalendarMessage::SetInfo { id, .. }
+            | CalendarMessage::SetLink { id, .. } | CalendarMessage::SetCategory { id, .. }
+            | CalendarMessage::SetPrivate { id, .. } | CalendarMessage::SetRecurrence { id, .. }
+            | CalendarMessage::CancelOccurrence { id, .. }
+            | CalendarMessage::ChangeOccurrence { id, .. }
+            | CalendarMessage::RestoreOccurrence { id, .. } => Some(*id),
+            CalendarMessage::SetRole { .. } | CalendarMessage::RemoveMember { .. } => None,
+        }
+    }
 }
 
 /// The one AIR record per identity. Deleting only marks an event; AIR never erases data.
-#[derive(Debug, Clone, Default, Hash, Serialize, Deserialize)]
+/// `members` always holds `creator` as an Owner.
+#[derive(Debug, Clone, Hash, Serialize, Deserialize)]
 pub struct Calendar {
     events: BTreeMap<EventId, Event>,
+    creator: Name,
+    members: BTreeMap<Name, Role>,
 }
 
 impl Calendar {
@@ -438,6 +470,21 @@ impl Calendar {
         calendar.send(CalendarMessage::RestoreOccurrence { id, date });
     }
 
+    /// Adds `name` with `role`, or changes their role. The creator's role can't change.
+    pub fn set_role(calendar: &mut Instance<Calendar>, name: Name, role: Role) {
+        calendar.send(CalendarMessage::SetRole { name, role });
+    }
+
+    /// The creator can't be removed.
+    pub fn remove_member(calendar: &mut Instance<Calendar>, name: Name) {
+        calendar.send(CalendarMessage::RemoveMember { name });
+    }
+
+    pub fn creator(&self) -> Name { self.creator }
+    /// Everyone with a role, the creator included.
+    pub fn members(&self) -> &BTreeMap<Name, Role> { &self.members }
+    pub fn role(&self, name: Name) -> Option<Role> { self.members.get(&name).copied() }
+
     /// `None` if there's no such event or it was deleted.
     pub fn event(&self, id: EventId) -> Option<&Event> {
         self.events.get(&id).filter(|event| !event.deleted)
@@ -458,32 +505,42 @@ impl Calendar {
         occurrences
     }
 
-    /// The event an edit message may change: it exists and isn't deleted.
-    fn editable(&mut self, id: EventId) -> Option<&mut Event> {
-        self.events.get_mut(&id).filter(|event| !event.deleted)
+    /// What `message` needs the sender's role to allow. Creating a private event also needs
+    /// `Privacy`. Changing or restoring an occurrence needs one action per field it sets or
+    /// clears. Empty (so it's ignored) for restoring an occurrence that wasn't changed, or a
+    /// change that sets nothing.
+    fn actions(&self, message: &CalendarMessage) -> Vec<Action> {
+        let action = match message {
+            CalendarMessage::CreateEvent { event, .. } if event.private => {
+                return vec![Action::Create, Action::Privacy];
+            }
+            CalendarMessage::CreateEvent { .. } => Action::Create,
+            CalendarMessage::DeleteEvent { .. } | CalendarMessage::CancelOccurrence { .. } => {
+                Action::Delete
+            }
+            CalendarMessage::SetTitle { .. } => Action::Title,
+            CalendarMessage::SetTiming { .. } => Action::Time,
+            CalendarMessage::SetLocation { .. } => Action::Location,
+            CalendarMessage::SetInfo { .. } => Action::Info,
+            CalendarMessage::SetLink { .. } => Action::Link,
+            CalendarMessage::SetCategory { .. } => Action::Category,
+            CalendarMessage::SetPrivate { .. } => Action::Privacy,
+            CalendarMessage::SetRecurrence { .. } => Action::Recurrence,
+            CalendarMessage::ChangeOccurrence { changes, .. } => return changes.actions(),
+            CalendarMessage::RestoreOccurrence { id, date } => {
+                let event = self.events.get(id);
+                return event.and_then(|event| event.changes(*date)).map(Override::actions)
+                    .unwrap_or_default();
+            }
+            CalendarMessage::SetRole { .. } | CalendarMessage::RemoveMember { .. } => {
+                Action::Members
+            }
+        };
+        vec![action]
     }
 
-    /// The exceptions of a repeating event, if its rule picks `date`. Exceptions don't change
-    /// which dates the rule picks, so a cancelled or moved occurrence still qualifies.
-    fn exceptions(&mut self, id: EventId, date: NaiveDate) -> Option<&mut BTreeMap<NaiveDate, Exception>> {
-        let event = self.editable(id)?;
-        let start = event.timing.start_date();
-        let recurrence = event.recurrence.as_mut()?;
-        let picked = recurrence.occurs_on(date, start, recurrence.last(start));
-        picked.then_some(recurrence.exceptions_mut())
-    }
-}
-
-impl Contract for Calendar {
-    type Init = ();
-    type Message = CalendarMessage;
-    type Result = ();
-
-    fn id() -> Id { Id::hash("CoconutCalendarV3") }
-
-    fn init(_init: (), _metadata: Metadata) -> Self { Calendar::default() }
-
-    fn apply(&mut self, message: CalendarMessage, _metadata: Metadata) {
+    /// Applies a message `apply` has already checked. `signer` sent it.
+    fn change(&mut self, message: CalendarMessage, signer: Name) {
         match message {
             CalendarMessage::CreateEvent { id, event } => {
                 if event.title.trim().is_empty() || !event.timing.is_valid() { return; }
@@ -502,6 +559,8 @@ impl Contract for Calendar {
                     recurrence,
                     time_proposals: vec![],
                     deleted: false,
+                    created_by: signer,
+                    last_changed_by: signer,
                     ..*event
                 };
                 self.events.entry(id).or_insert(event);
@@ -588,6 +647,59 @@ impl Contract for Calendar {
                     exceptions.remove(&date);
                 }
             }
+            CalendarMessage::SetRole { name, role } => {
+                if name != self.creator { self.members.insert(name, role); }
+            }
+            CalendarMessage::RemoveMember { name } => {
+                if name != self.creator { self.members.remove(&name); }
+            }
+        }
+    }
+
+    /// The event an edit message may change: it exists and isn't deleted.
+    fn editable(&mut self, id: EventId) -> Option<&mut Event> {
+        self.events.get_mut(&id).filter(|event| !event.deleted)
+    }
+
+    /// The exceptions of a repeating event, if its rule picks `date`. Exceptions don't change
+    /// which dates the rule picks, so a cancelled or moved occurrence still qualifies.
+    fn exceptions(&mut self, id: EventId, date: NaiveDate) -> Option<&mut BTreeMap<NaiveDate, Exception>> {
+        let event = self.editable(id)?;
+        let start = event.timing.start_date();
+        let recurrence = event.recurrence.as_mut()?;
+        let picked = recurrence.occurs_on(date, start, recurrence.last(start));
+        picked.then_some(recurrence.exceptions_mut())
+    }
+}
+
+impl Contract for Calendar {
+    type Init = ();
+    type Message = CalendarMessage;
+    type Result = ();
+
+    fn id() -> Id { Id::hash("CoconutCalendarV4") }
+
+    fn init(_init: (), metadata: Metadata) -> Self {
+        let creator = metadata.signer;
+        let members = BTreeMap::from([(creator, Role::Owner)]);
+        Calendar { events: BTreeMap::new(), creator, members }
+    }
+
+    /// AIR checked the signature, so `metadata.signer` is the sender. Their role must allow
+    /// every action the message needs, or it's ignored whole.
+    fn apply(&mut self, message: CalendarMessage, metadata: Metadata) {
+        let signer = metadata.signer;
+        let Some(role) = self.role(signer) else { return };
+        let actions = self.actions(&message);
+        if actions.is_empty() || !actions.into_iter().all(|action| role.allows(action)) { return; }
+        // The event as it was, so `last_changed_by` only moves if the message changed it.
+        let id = message.event();
+        let before = id.and_then(|id| self.events.get(&id).cloned());
+        self.change(message, signer);
+        if let (Some(id), Some(before)) = (id, before)
+            && let Some(event) = self.events.get_mut(&id)
+            && *event != before {
+            event.last_changed_by = signer;
         }
     }
 }
