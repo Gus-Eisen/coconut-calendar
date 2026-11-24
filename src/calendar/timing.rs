@@ -62,34 +62,39 @@ impl Timing {
     }
 
     /// Reads a form's timing steps: First Day and Last Day, Date, Start Time and End Time (the
-    /// overnight rule), or Change time's Date, Start Time, End Date and End Time. The validators
-    /// have checked every input, so the unwraps can't fail.
-    pub fn from_states(states: &[State], time_zone: Tz) -> Timing {
+    /// overnight rule), or Change time's Date, Start Time, End Date and End Time. A step's
+    /// answer isn't checked again when an earlier one changes, so this makes the steps' checks
+    /// again: `None` if any fails.
+    pub fn from_states(states: &[State], time_zone: Tz) -> Option<Timing> {
         let [State::Number(day), rest @ ..] = states else { unreachable!() };
-        Self::from_start(Event::date(day).unwrap(), rest, time_zone)
+        Self::from_start(Event::date(day)?, rest, time_zone)
     }
 
-    /// Reads the timing steps after Date or First Day, starting on `day`. The Day view's Create
-    /// Event already knows the date (year included), so its forms skip that step.
-    pub fn from_start(day: NaiveDate, states: &[State], time_zone: Tz) -> Timing {
-        let time = |input: &str, after, later_day| Event::time(input, after, later_day).unwrap();
-        match states {
+    /// Reads the timing steps after Date or First Day, starting on `day`, as `from_states` does.
+    /// The Day view's Create Event already knows the date (year included), so its forms skip
+    /// that step.
+    pub fn from_start(day: NaiveDate, states: &[State], time_zone: Tz) -> Option<Timing> {
+        let time = |input: &str, after, later_day| Event::time(input, after, later_day).ok();
+        let end_date = |input: &str| {
+            Event::date_from(input, day).filter(|end| (*end - day).num_days() <= 28)
+        };
+        let timing = match states {
             [State::Number(last_day)] => {
-                let last_day = Event::date_from(last_day, day).unwrap();
-                Timing::AllDay { first_day: day, last_day }
+                Timing::AllDay { first_day: day, last_day: end_date(last_day)? }
             }
             [State::Text(start), State::Text(end)] => {
-                let start = time(start, None, false);
-                Timing::from_times(day, start, time(end, Some(start), false), time_zone).unwrap()
+                let start = time(start, None, false)?;
+                Timing::from_times(day, start, time(end, Some(start), false)?, time_zone)?
             }
             [State::Text(start), State::Number(end_day), State::Text(end)] => {
-                let start = time(start, None, false);
-                let end_day = Event::date_from(end_day, day).unwrap();
-                let end = end_day.and_time(time(end, Some(start), end_day > day));
+                let start = time(start, None, false)?;
+                let end_day = end_date(end_day)?;
+                let end = end_day.and_time(time(end, Some(start), end_day > day)?);
                 Timing::Timed { start: day.and_time(start), end, time_zone }
             }
             _ => unreachable!(),
-        }
+        };
+        timing.is_valid().then_some(timing)
     }
 
     pub fn is_valid(&self) -> bool {

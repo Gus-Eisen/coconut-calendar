@@ -74,12 +74,16 @@ impl NewEvent {
     /// Date / First Day step.
     fn form(theme: &Theme, calendar: Instance<Calendar>, kind: EventKind, day: Option<NaiveDate>, width: f32) -> Form {
         let review_theme = theme.clone();
-        let review = move |states: &Vec<State>| {
-            Self::review(&Event::from_states(states, day), &review_theme, width)
+        let review = move |states: &Vec<State>| match Event::from_states(states, day) {
+            Some(event) => Self::review(&event, &review_theme, width),
+            None => vec![Display::instructions("Go back and check the dates and times.")],
         };
 
+        // Continue saves nothing when the steps fail their checks, and this says so.
         let success = move |states: Vec<State>| {
-            let event = Event::from_states(&states, day);
+            let Some(event) = Event::from_states(&states, day) else {
+                return (Icons::Error, "Event not saved.".to_string());
+            };
             // A weekly set that skips the start's weekday starts later than Date.
             let start = event.timing().start_date();
             let first = event.recurrence().and_then(|rule| rule.first(start));
@@ -95,7 +99,7 @@ impl NewEvent {
                     format!("All-day event saved for {} to {}", date(first_day), date(last_day))
                 }
                 (Timing::Timed { time_zone, .. }, first) => {
-                    // End Time's validator checked `is_valid`, so `in_zone` can't panic.
+                    // `Event::from_states` checked `is_valid`, so `in_zone` can't panic.
                     let (start, _) = event.timing().in_zone(time_zone).unwrap();
                     let time = Timing::format_time(start.time());
                     match first {
@@ -129,7 +133,9 @@ impl NewEvent {
     /// Puts the steps every kind shares around `timing`, so `Event::from_states` can read either.
     fn flow(theme: &Theme, mut calendar: Instance<Calendar>, day: Option<NaiveDate>, timing: Vec<FormItem>, review: Review, success: Success) -> Form {
         let submit = Box::new(move |_ctx: &mut Context, states: &Vec<State>| {
-            Calendar::create_event(&mut calendar, Event::from_states(states, day));
+            if let Some(event) = Event::from_states(states, day) {
+                Calendar::create_event(&mut calendar, event);
+            }
             FormComplete::None
         }) as Box<dyn FormSubmit>;
 

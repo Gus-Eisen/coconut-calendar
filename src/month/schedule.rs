@@ -75,12 +75,15 @@ impl ChangeTime {
 
     /// Continue sends `set_timing` (whole series) or `change_occurrence` (one occurrence)
     /// unless nothing changed, then goes back to the detail page. A whole-series review warns
-    /// about single changes the new time drops.
+    /// about single changes the new time drops. If the steps fail their checks, the review
+    /// says to go back and Continue does nothing: the review is the last page, so chk stays.
     fn flow(theme: &Theme, edit: Edit, zone: Tz, steps: Vec<FormItem>, width: f32) -> Form {
         let Edit { mut calendar, id, series, scope, current } = edit;
         let review_theme = theme.clone();
         let review = move |states: &Vec<State>| {
-            let new = Timing::from_states(states, zone);
+            let Some(new) = Timing::from_states(states, zone) else {
+                return vec![Display::instructions("Go back and check the dates and times.")];
+            };
             let dropped = match scope {
                 Scope::Series => series.dropped_by_timing(&new),
                 Scope::Occurrence(_) => 0,
@@ -93,7 +96,7 @@ impl ChangeTime {
                 .collect()
         };
         let submit = Box::new(move |_ctx: &mut Context, states: &Vec<State>| {
-            let timing = Timing::from_states(states, zone);
+            let Some(timing) = Timing::from_states(states, zone) else { return FormComplete::None };
             match scope {
                 _ if timing == current => {}
                 Scope::Series => Calendar::set_timing(&mut calendar, id, timing),
@@ -117,7 +120,7 @@ impl ChangeTime {
                 ("Last day", last_day.format("%-d %b %Y").to_string()),
             ],
             Timing::Timed { time_zone, .. } => {
-                // Stored timings and checked form timings are valid, so `in_zone` can't panic.
+                // Stored timings and `Timing::from_states`' are valid, so `in_zone` can't panic.
                 let (start, end) = timing.in_zone(time_zone).unwrap();
                 let date_time = |value: chrono::NaiveDateTime| {
                     format!("{}, {}", value.format("%-d %b %Y"), Timing::format_time(value.time()))
