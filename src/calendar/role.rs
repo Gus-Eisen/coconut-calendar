@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 /// What a person on a calendar may do, and how much of it they see. Least powerful first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Role {
-    Colleague,
+    Availability,
     Viewer,
     Editor,
     Owner,
@@ -11,11 +11,11 @@ pub enum Role {
 
 impl Role {
     /// In the order the role lists show them: least powerful first, so it's the default.
-    pub fn options() -> [Role; 4] { [Role::Colleague, Role::Viewer, Role::Editor, Role::Owner] }
+    pub fn options() -> [Role; 4] { [Role::Availability, Role::Viewer, Role::Editor, Role::Owner] }
 
     pub fn label(self) -> &'static str {
         match self {
-            Role::Colleague => "Colleague",
+            Role::Availability => "Availability",
             Role::Viewer => "Viewer",
             Role::Editor => "Editor",
             Role::Owner => "Owner",
@@ -25,7 +25,7 @@ impl Role {
     /// The role list's subtitle.
     pub fn description(self) -> &'static str {
         match self {
-            Role::Colleague => "Can propose new times. Sees when you're busy.",
+            Role::Availability => "Can propose new times. Sees when you're busy.",
             Role::Viewer => "Sees event details. Can't make changes.",
             Role::Editor => "Can create and change events. Doesn't see private events.",
             Role::Owner => "Full control; sees private events.",
@@ -35,7 +35,7 @@ impl Role {
     /// The person page's "Can" row.
     pub fn abilities(self) -> &'static str {
         match self {
-            Role::Colleague => "Propose new times",
+            Role::Availability => "Propose new times",
             Role::Viewer => "Nothing; view only",
             Role::Editor => "Create and change events",
             Role::Owner => "Everything",
@@ -44,7 +44,7 @@ impl Role {
 
     pub fn visibility(self) -> Visibility {
         match self {
-            Role::Colleague => Visibility::FreeBusy,
+            Role::Availability => Visibility::FreeBusy,
             Role::Viewer | Role::Editor => Visibility::Details,
             Role::Owner => Visibility::Private,
         }
@@ -52,7 +52,7 @@ impl Role {
 
     pub fn allows(self, action: Action) -> bool {
         match self {
-            Role::Colleague => action == Action::ProposeTime,
+            Role::Availability => action == Action::ProposeTime,
             Role::Viewer => false,
             Role::Editor => !matches!(action, Action::Privacy | Action::Members),
             Role::Owner => true,

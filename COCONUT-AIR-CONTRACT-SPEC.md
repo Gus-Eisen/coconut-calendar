@@ -905,16 +905,17 @@ Open questions:
 
 ## 3. Groups
 
-Bob has friends and colleagues who need to interact with his calendar (more specifically, his events). Bob has the option to assign roles to any person (or bot) that he wants. The assignment of roles is best understood as ownership permissions. Bob might favor his personal assistant, Alice, to have full control over his calendar. This means the ability to create, modify, and delete events as Alice sees fit, without Bob's explicit approval prior to each action. Bob has a colleague, Charlie, who needs to ability to propose new event times. Bob can thus assign the role "colleague" to Charlie. This role is more limited in scope than "personal assistant" in that it does not have the power to create or delete events, it only can propose a new time for an event.
+Bob has friends and colleagues who need to interact with his calendar (more specifically, his events). Bob has the option to assign roles to any person (or bot) that he wants. The assignment of roles is best understood as ownership permissions. Bob might favor his personal assistant, Alice, to have full control over his calendar. This means the ability to create, modify, and delete events as Alice sees fit, without Bob's explicit approval prior to each action. Bob has a colleague, Charlie, who needs to ability to propose new event times. Bob can thus assign the role "Availability" to Charlie. This role is more limited in scope than "personal assistant" in that it does not have the power to create or delete events, it only can propose a new time for an event.
 
 An Coconut event is digital and thus differs from the material world. The creator of an event is the owner by default. Ownership is defined by control, ie, the power to modify the event's title, info box, time, and attendee list.
 
 I'm also (currently) imagining roles as an enum. Four roles (Gus, 2026-11-24),
-least powerful first:
+least powerful first. The fourth role was first called Colleague and was renamed
+Availability (Gus, 2026-11-24), so its name says what it gets: free/busy times.
 
 ```rust
 pub enum Role {
-    Colleague,
+    Availability,
     Viewer,
     Editor,
     Owner,
@@ -923,7 +924,7 @@ pub enum Role {
 
 | Role | Who | Visibility | Example |
 |------|-----|------------|---------|
-| `Colleague` | Someone who needs to see when the calendar is busy and propose a new event for an Owner to approve (for example a colleague finding an open slot). | `FreeBusy` | Charlie |
+| `Availability` | Someone who needs to see when the calendar is busy and propose a new event for an Owner to approve (for example a colleague finding an open slot). | `FreeBusy` | Charlie |
 | `Viewer` | Someone who can look at event details but not change anything. | `Details` | — |
 | `Editor` | Someone who can create, change and delete events, but can't manage people and can't see or set private events. | `Details` | — |
 | `Owner` | The calendar's owner, and anyone the owner trusts with full control, such as a personal assistant or the owner's own agent. | `Private` | Bob, Alice |
@@ -942,10 +943,10 @@ Screens (step 5):
 - **Add Person** (UI: see 21, 21b): `FormItem::search` over the profiles this
   device already knows (people already on the calendar are left out), with
   "New contact" to paste or scan an AIR `Name`, then a **Role** radio list,
-  then Review and Success. The role list puts **Colleague first**, then
+  then Review and Success. The role list puts **Availability first**, then
   Viewer, Editor, Owner, so the least powerful role is the default and giving
   someone more power always takes a deliberate tap. Each option's subtitle
-  says what the role can do: Colleague "Can propose new times. Sees when
+  says what the role can do: Availability "Can propose new times. Sees when
   you're busy."; Viewer "Sees event details. Can't make changes."; Editor
   "Can create and change events. Doesn't see private events."; Owner "Full
   control; sees private events."
@@ -953,9 +954,9 @@ Screens (step 5):
   do, with Change role and Remove (both Owner-only). Remove asks for
   confirmation (Remove / Cancel). chk's role list always starts on the first
   option, so Change role puts the current role first and marks it, rather
-  than leaving Colleague selected by default.
+  than leaving Availability selected by default.
 - Adding a person records their role on this calendar. Sharing the instance,
-  proposing an event, and hiding details from a Colleague or private events
+  proposing an event, and hiding details from Availability members or private events
   from Editor and Viewer are later steps (6 and 7). The History log (UI: see
   23) is not in this step; the event detail page shows Created by and Last
   changed by instead.
@@ -1034,7 +1035,7 @@ pub enum Action {
 
 Four-role permissions (Gus, 2026-11-24):
 
-| Action | `Owner` | `Editor` | `Viewer` | `Colleague` |
+| Action | `Owner` | `Editor` | `Viewer` | `Availability` |
 | -------- | :--------: | :--------: | :--------: | :-----------: |
 | `Create` | ✅ | ✅ | ❌ | ❌ |
 | `Delete` | ✅ | ✅ | ❌ | ❌ |
@@ -1061,7 +1062,7 @@ Four-role permissions (Gus, 2026-11-24):
 | `Recurrence` | `recurrence`'s `frequency` and `until` |
 | `Attendee` | `attendees` (adding and removing attendees) |
 | `Link` | `link` |
-| `ProposeTime` | `time_proposals` (adding a proposal). Defined for Colleague and Owner; not wired until step 6. Editor also has it, and can already set the time. |
+| `ProposeTime` | `time_proposals` (adding a proposal). Defined for Availability and Owner; not wired until step 6. Editor also has it, and can already set the time. |
 | `Privacy` | `private` (moves the event between the "Events" and "Private events" instances) |
 | `Category` | `category` |
 | `Members` | The calendar's member list (adding a person, changing a role, removing a person) |
@@ -1197,9 +1198,9 @@ change *where* events are sent, not what an `Event` is.
    (done, 2026-11-20): the bumper is on today and later days; Date / First
    Day is skipped; the start is that day's full date.
 5. Attribution and roles, and the People tab (done, 2026-11-24): four roles
-   (`Colleague`, `Viewer`, `Editor`, `Owner`), role checks in `apply`,
+   (`Availability`, `Viewer`, `Editor`, `Owner`), role checks in `apply`,
    `created_by` / `last_changed_by`, and the People tab (UI: see 20–22). The
-   contract id is `CoconutCalendarV4`. Colleague proposals and the approval
+   contract id is `CoconutCalendarV4`. Availability proposals and the approval
    flow are step 6. Showing busy blocks, and hiding private events from
    Editor and Viewer, is step 7. The History log (UI: see 23) is still not
    in the order of work; the event detail page shows Created by and Last
