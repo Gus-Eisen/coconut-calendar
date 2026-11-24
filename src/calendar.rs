@@ -78,20 +78,27 @@ impl Event {
             .find(|date| *date >= earliest)
     }
 
+    /// Reads a typed time: `9:30 PM`, `9:30pm`, `9pm`, `21:30`, or three or four digits whose
+    /// last two are the minutes (`930`, `2130`, `930pm`). With AM/PM the hour is 1 to 12;
+    /// without, 0 to 23. A bare hour such as `9` is ambiguous, so it's rejected.
     pub fn time(input: &str) -> Option<NaiveTime> {
-        let input = input.trim();
-        let uppercase = input.to_ascii_uppercase();
-        if let Some(clock) = uppercase.strip_suffix("AM").or_else(|| uppercase.strip_suffix("PM")) {
-            let meridiem = &uppercase[clock.len()..];
-            let clock = clock.trim_end();
-            let normalized = if clock.contains(':') {
-                format!("{clock} {meridiem}")
-            } else {
-                format!("{clock}:00 {meridiem}")
-            };
-            NaiveTime::parse_from_str(&normalized, "%I:%M %p").ok()
+        let uppercase = input.trim().to_ascii_uppercase();
+        let before = uppercase.strip_suffix("AM").or_else(|| uppercase.strip_suffix("PM"));
+        let clock = before.unwrap_or(&uppercase).trim_end();
+        let digits = (3..=4).contains(&clock.len()) && clock.chars().all(|c| c.is_ascii_digit());
+        let clock = if digits {
+            let (hour, minute) = clock.split_at(clock.len() - 2);
+            format!("{hour}:{minute}")
         } else {
-            NaiveTime::parse_from_str(input, "%H:%M").ok()
+            clock.to_string()
+        };
+        match before {
+            Some(before) => {
+                let meridiem = &uppercase[before.len()..];
+                let clock = if clock.contains(':') { clock } else { format!("{clock}:00") };
+                NaiveTime::parse_from_str(&format!("{clock} {meridiem}"), "%I:%M %p").ok()
+            }
+            None => NaiveTime::parse_from_str(&clock, "%H:%M").ok(),
         }
     }
 
