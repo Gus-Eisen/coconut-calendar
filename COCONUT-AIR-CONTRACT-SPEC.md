@@ -39,7 +39,7 @@ Screen numbers such as "see 21b" refer to `design/v1/screens/21b-*.png`.
 | `location`         | `Option<String>` | Where the event happens, trimmed. `None` if left blank.  | `Some("Room 4B")`             |
 | `info`             | `Option<String>` | Extra notes about the event, trimmed. `None` if left blank. | `Some("Bring the slides")` |
 | `attendees`        | `Vec<Attendee>`  | The users invited to the event, each with their response. Empty if there are none. | `vec![Attendee { name: alice, response: Response::Accepted }]` |
-| `link`             | `Option<String>` | One optional link, for a video call or anything else, trimmed. `None` if left blank. | `Some("https://meet.example.com/abc-123")` |
+| `link`             | `Option<String>` | One optional web link (http or https), for a video call or a doc. The forms check it with `Event::web_link` and store it trimmed, with `https://` added if it has no scheme. `None` if left blank. Values already in AIR aren't re-checked. | `Some("https://meet.example.com/abc-123")` |
 | `recurrence`       | `Option<Recurrence>` | How the event repeats, until when, and which occurrences were cancelled or changed. `None` if it happens once. | `Some(Recurrence { frequency: Frequency::Weekly { days: vec![Weekday::Mon] }, interval: 1, until: Some(2027-06-30), count: None, exceptions: {} })` |
 | `category`         | `Category`       | Whether it's a work or personal event. Shown as a text label (see `Category`). | `Category::Work` |
 | `time_proposals`   | `Vec<TimeProposal>` | New times that users have proposed and that are still waiting for everyone to agree. Empty if there are none. | `vec![TimeProposal { proposer: charlie, timing: Timing::Timed { .. }, approvals: {bob} }]` |
@@ -565,8 +565,14 @@ Repeating all-day 10. From the month they stay 8, 7, 12 and 11.
   First day and Last day), and Location, Info and Link if they're filled in.
   All-day events have no time-zone row, because their dates are the same
   everywhere (UI: see 05). Long values are shortened with "…" to fit
-  (`DayScreen::fit_label`). The Link step's placeholder is "Link (optional)";
-  it is always valid, and a blank value is stored as `None`. It has a **Paste**
+  (`DayScreen::fit_label`). The Link step's placeholder is "Link (optional)".
+  A blank value is valid and stored as `None`. Otherwise it must be a web
+  address (`Event::web_link`): one token, an http or https scheme (`https://`
+  is added if there is none; other schemes such as `mailto:` are refused), a
+  host with a dot whose parts are letters, digits and hyphens and don't start
+  or end with a hyphen, then an optional `:port` and path. Anything else shows
+  "Enter a full link, like https://meet.google.com/abc" and turns Continue
+  off. It has a **Paste**
   action ("Paste clipboard") that puts the clipboard text into the field.
   Edit details has no Paste.
 - The success message names the start date and time, or the first day (and
@@ -782,7 +788,7 @@ split:
 
 | Screen | What it changes | How |
 |--------|-----------------|-----|
-| Edit details (UI: see 08) | Title, Location, Info, Link | One page (`Form::page` / `PageType::edit_and_display`) with a `FormItem::text_with_preset` for each field, filled with the current values. Save stays off until something changes and every field is valid. A blank Link is stored as `None`. Calls the setter for each changed field. On a repeating event, the existing Which Events? step covers the link like the other text fields. |
+| Edit details (UI: see 08) | Title, Location, Info, Link | One page (`Form::page` / `PageType::edit_and_display`) with a `FormItem::text_with_preset` for each field, filled with the current values. Save stays off until something changes and every field is valid. Link is checked with `Event::web_link`, the same as the Link step: an invalid link shows the same error and keeps Save off. A blank Link is stored as `None`, and a link without a scheme is saved with `https://`. Calls the setter for each changed field. On a repeating event, the existing Which Events? step covers the link like the other text fields. |
 | Change time (UI: see 09) | `timing` | A flow: Date, Start Time, End Date, End Time, then a review showing the current and new times. Step titles are plain ("Start Time", "End Time"): chk clips longer ones. Date is on or after today; End Date uses the same rule as Last Day (on or after the start, at most 28 days later). Start Time and End Time are text steps, same as the new-event forms. Times are typed (12-hour or 24-hour) and shown in 12-hour form in the event's own time zone (the `time_zone` in its `Timing`), and the review names it, e.g. "25 Nov 2026, 10:00 AM". An all-day event changed to timed uses the device's zone. Calls `set_timing`, unless the timing is unchanged. For one occurrence (3b), Current is the occurrence's own time, there's no Until limit, and it calls `change_occurrence`. |
 | Change to all-day or timed (UI: see 10) | `timing` | A picker like the event-type picker (Timed / All-day, with the current timing in the first option's subtitle), then the matching timing flow. |
 | Change category or privacy (UI: see 11) | `category`, `private` | A one-step radio page: Personal / Work, or Not private / Private. The radio always starts on its first option, so the current value is shown as that option's subtitle. Calls `set_category` or `set_private`. |
@@ -1240,6 +1246,15 @@ doesn't decide yet. The open questions in sections 2 and 4 still stand.
   event under 24 hours shows on the month only on its start day, like Google
   Calendar; the Day view still lists its tail. Timed events of 24 hours or
   more and all-day spans still show on every day they cover.
+- **Link validation.** Decided 2026-11-23 (Gus): the Link step and Edit
+  details accept only a blank value or an http/https web address, checked by
+  `Event::web_link`. A link typed without a scheme gets `https://`
+  (`meet.google.com/abc` is stored as `https://meet.google.com/abc`). Hosts
+  are ASCII letters, digits and hyphens with at least one dot. Links already
+  in AIR aren't re-checked, so an old invalid link has to be fixed or cleared
+  before Edit details can save. Known gaps: a scheme-less link with `://`
+  later on (such as `example.com/go?to=https://x`) is refused, and iOS
+  capitalises the first letter typed.
 
 **Invites and proposals**
 
