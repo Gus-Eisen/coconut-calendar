@@ -1,7 +1,7 @@
 use chk::{
     Action, Bumper, Context, Display, Flow, ListItem, Offset, Page, PageType, Root, Theme, Watch,
 };
-use chrono::{DateTime, Datelike, Months, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, Datelike, Months, NaiveDate, NaiveDateTime, TimeDelta, Utc};
 use chrono_tz::Tz;
 use ramp::prism::{air::Instance, drawable::{Color, text::{Align, Text}}};
 
@@ -49,7 +49,7 @@ impl MonthScreen {
         let today = now.with_timezone(&zone).date_naive();
         let end = start + Months::new(1);
         let days = start.iter_days().take_while(|day| *day < end).map(|day| {
-            let summary = Self::summary(&state.on(day, zone), day, now, zone)
+            let summary = Self::summary(state.on(day, zone), day, now, zone)
                 .map(|summary| DayScreen::fit_label(theme, width, &summary, false));
             let weekday = match day == today {
                 true => format!("{} · Today", day.format("%A")),
@@ -64,11 +64,16 @@ impl MonthScreen {
 
     /// The day's row summary in `zone`: its one event, even after it has ended. With several,
     /// the first timed event that hasn't ended at `now`, else (today or later) the first all-day
-    /// one, else "N events" once they've all ended. `None` for a day with no events.
-    fn summary(occurrences: &[Occurrence<'_>], day: NaiveDate, now: DateTime<Utc>, zone: Tz) -> Option<String> {
+    /// one, else "N events" once they've all ended. `None` for a day with no events. The tail of
+    /// an overnight event (timed, under 24 hours, started on an earlier day) isn't shown or
+    /// counted, so it only appears on the day it starts.
+    fn summary(mut occurrences: Vec<Occurrence<'_>>, day: NaiveDate, now: DateTime<Utc>, zone: Tz) -> Option<String> {
         let today = now.with_timezone(&zone).date_naive();
+        occurrences.retain(|occurrence| !occurrence.timing().instants().is_some_and(|(start, end)| {
+            end - start < TimeDelta::hours(24) && start.with_timezone(&zone).date_naive() < day
+        }));
         // `on` lists all-day events first, then timed ones by start, so `find` takes the first.
-        let shown = match occurrences {
+        let shown = match occurrences.as_slice() {
             [] => return None,
             [occurrence] => Some(occurrence),
             occurrences => {
