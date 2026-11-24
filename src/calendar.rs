@@ -82,8 +82,10 @@ impl Event {
     /// last two are the minutes (`930`, `2130`, `930pm`). With AM/PM the hour is 1 to 12;
     /// without, 0 to 23. A bare hour such as `9` is ambiguous, so it's rejected. With `after`
     /// (End Time's start), an hour of 1 to 12 with no AM/PM and no leading zero (`130`, not
-    /// `0130`) is AM or PM, whichever comes first on the clock from `after`, or equals it.
-    pub fn time(input: &str, after: Option<NaiveTime>) -> Option<NaiveTime> {
+    /// `0130`) is AM or PM, whichever comes first on the clock from `after`, or equals it. On a
+    /// `later_day` (End Date after the start date) that hour needs AM or PM instead.
+    pub fn time(input: &str, after: Option<NaiveTime>, later_day: bool) -> Result<NaiveTime, &'static str> {
+        let unreadable = "Type a time like 9:30 AM or 9:30 PM.";
         let uppercase = input.trim().to_ascii_uppercase();
         let before = uppercase.strip_suffix("AM").or_else(|| uppercase.strip_suffix("PM"));
         let clock = before.unwrap_or(&uppercase).trim_end();
@@ -98,20 +100,22 @@ impl Event {
             Some(before) => {
                 let meridiem = &uppercase[before.len()..];
                 let clock = if clock.contains(':') { clock } else { format!("{clock}:00") };
-                NaiveTime::parse_from_str(&format!("{clock} {meridiem}"), "%I:%M %p").ok()
+                NaiveTime::parse_from_str(&format!("{clock} {meridiem}"), "%I:%M %p")
+                    .map_err(|_| unreadable)
             }
             None => {
-                let time = NaiveTime::parse_from_str(&clock, "%H:%M").ok()?;
+                let time = NaiveTime::parse_from_str(&clock, "%H:%M").map_err(|_| unreadable)?;
                 let ambiguous = !clock.starts_with('0') && (1..=12).contains(&time.hour());
                 match after {
+                    _ if ambiguous && later_day => Err("Add AM or PM, like 10:00 AM."),
                     Some(start) if ambiguous => {
-                        let other = time.with_hour((time.hour() + 12) % 24)?;
-                        let ahead = |time: NaiveTime| {
-                            (time - start + TimeDelta::days(1)).num_minutes() % (24 * 60)
+                        let other = time.with_hour((time.hour() + 12) % 24).ok_or(unreadable)?;
+                        let ahead = |time: &NaiveTime| {
+                            (*time - start + TimeDelta::days(1)).num_minutes() % (24 * 60)
                         };
-                        [time, other].into_iter().min_by_key(|time| ahead(*time))
+                        Ok(std::cmp::min_by_key(time, other, ahead))
                     }
-                    _ => Some(time),
+                    _ => Ok(time),
                 }
             }
         }

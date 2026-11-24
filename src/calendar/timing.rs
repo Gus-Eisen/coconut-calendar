@@ -72,19 +72,20 @@ impl Timing {
     /// Reads the timing steps after Date or First Day, starting on `day`. The Day view's Create
     /// Event already knows the date (year included), so its forms skip that step.
     pub fn from_start(day: NaiveDate, states: &[State], time_zone: Tz) -> Timing {
-        let time = |input: &str, after| Event::time(input, after).unwrap();
+        let time = |input: &str, after, later_day| Event::time(input, after, later_day).unwrap();
         match states {
             [State::Number(last_day)] => {
                 let last_day = Event::date_from(last_day, day).unwrap();
                 Timing::AllDay { first_day: day, last_day }
             }
             [State::Text(start), State::Text(end)] => {
-                let start = time(start, None);
-                Timing::from_times(day, start, time(end, Some(start)), time_zone).unwrap()
+                let start = time(start, None, false);
+                Timing::from_times(day, start, time(end, Some(start), false), time_zone).unwrap()
             }
             [State::Text(start), State::Number(end_day), State::Text(end)] => {
-                let start = time(start, None);
-                let end = Event::date_from(end_day, day).unwrap().and_time(time(end, Some(start)));
+                let start = time(start, None, false);
+                let end_day = Event::date_from(end_day, day).unwrap();
+                let end = end_day.and_time(time(end, Some(start), end_day > day));
                 Timing::Timed { start: day.and_time(start), end, time_zone }
             }
             _ => unreachable!(),

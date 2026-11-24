@@ -302,9 +302,9 @@ impl FormTimes {
 
     pub fn start_step(title: &str, times: Rc<RefCell<FormTimes>>) -> FormItem {
         FormItem::text(title, "9:30 AM", None, move |_ctx: &mut Context, input: String| {
-            let start = Event::time(&input, None);
-            times.borrow_mut().start = start;
-            Self::validity(&input, start.ok_or("Type a time like 9:30 AM or 9:30 PM."))
+            let start = Event::time(&input, None, false);
+            times.borrow_mut().start = start.ok();
+            Self::validity(&input, start)
         })
     }
 
@@ -327,12 +327,14 @@ impl FormTimes {
     }
 
     /// End Time: after the start in `zone`. With an End Date step it ends on that date;
-    /// without one (the new-event forms) an earlier end means the next day.
+    /// without one (the new-event forms) an earlier end means the next day. An hour of 1 to 12
+    /// with no AM/PM and no leading zero is AM or PM, whichever comes first after the start;
+    /// on an End Date after the start date it's an error asking for AM or PM.
     pub fn end_time_step(times: Rc<RefCell<FormTimes>>, zone: Tz) -> FormItem {
         FormItem::text("End Time", "9:30 AM", None, move |_ctx: &mut Context, input: String| {
             let times = times.borrow();
-            let end = Event::time(&input, times.start).ok_or("Type a time like 9:30 AM or 9:30 PM.");
-            let checked = end.and_then(|end| {
+            let later_day = times.date.zip(times.end_date).is_some_and(|(date, end)| end > date);
+            let checked = Event::time(&input, times.start, later_day).and_then(|end| {
                 let timing = match (times.date, times.start, times.end_date) {
                     (Some(date), Some(start), Some(end_date)) => Some(Timing::Timed {
                         start: date.and_time(start), end: end_date.and_time(end), time_zone: zone,
