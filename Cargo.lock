@@ -881,6 +881,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "iana-time-zone",
+ "include_dir",
  "ramp2",
  "serde",
 ]

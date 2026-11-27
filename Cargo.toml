@@ -11,6 +11,7 @@ chrono = {version = "0.4.44", features = ["serde"]}
 serde = {version = "1", features = ["derive"]}
 chrono-tz = {version = "0.10.4", features = ["serde"]}
 iana-time-zone = "0.1.65"
+include_dir = "0.7.4"
 
 [package.metadata.piston.ios]
 team = "6DW6N89944"

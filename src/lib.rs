@@ -1,4 +1,5 @@
 use chk::{App, Assets, ChkTheme, Color, Context, Icons, RootInfo, Theme};
+use include_dir::include_dir;
 use prism::drawable::Drawable;
 use ramp::prism;
 
@@ -17,7 +18,7 @@ impl prism::Application for CoconutCalendar {
     }
 
     fn new(ctx: &mut Context) -> impl Drawable {
-        CoconutCalendar.build(ctx, Assets::new(vec![]))
+        CoconutCalendar.build(ctx, Assets::new(vec![include_dir!("$CARGO_MANIFEST_DIR/resources")]))
     }
 }
 
